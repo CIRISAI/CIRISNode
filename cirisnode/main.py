@@ -9,6 +9,7 @@ from cirisnode.api.health.routes import router as health_router
 from cirisnode.api.agent.routes import agent_router
 from cirisnode.api.auth.routes import auth_router
 from cirisnode.api.wa.routes import wa_router
+from cirisnode.api.config.routes import config_router
 
 app = FastAPI()
 
@@ -30,6 +31,7 @@ app.include_router(agent_router)
 app.include_router(auth_router)
 app.include_router(benchmarks_router)
 app.include_router(wa_router)
+app.include_router(config_router)
 
 @app.get("/metrics")
 def metrics():

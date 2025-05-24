@@ -49,8 +49,7 @@ const APIKeyManager: React.FC = () => {
       formData.append('password', password);
 
       // The UI calls /api/v1/auth/token. This will be proxied by Next.js
-      // to http://api:8000/api/v1/auth/token (backend API service).
-      // This requires the auth_router in main.py to be prefixed with /api/v1/auth.
+      // to /api/v1/auth/token (backend API service), proxied by Next.js
       const fetchUrl = process.env.NEXT_PUBLIC_API_BASE_URL
         ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/auth/token`
         : '/api/v1/auth/token'; 

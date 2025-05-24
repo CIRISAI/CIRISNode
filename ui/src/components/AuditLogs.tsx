@@ -44,6 +44,19 @@ const AuditLogs: React.FC = () => {
     fetchLogs();
   }, []);
 
+  // If not loading and logs is empty, show a test log
+  const displayLogs = !loading && logs.length === 0
+    ? [{
+        id: "test-log-1",
+        timestamp: new Date().toISOString(),
+        actor: "system",
+        event_type: "test_event",
+        payload_sha256: "testhash",
+        details: { message: "This is a test audit log." },
+        archived: false,
+      }]
+    : logs;
+
   return (
     <div style={{ margin: "20px auto", maxWidth: 900 }}>
       <h2>Audit Logs</h2>
@@ -74,7 +87,7 @@ const AuditLogs: React.FC = () => {
       {loading && <p>Loading audit logs...</p>}
       {error && <div style={{ color: "red" }}>{error}</div>}
       {!loading && logs.length === 0 && <p>No audit logs found.</p>}
-      {!loading && logs.length > 0 && (
+      {!loading && (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
@@ -87,7 +100,7 @@ const AuditLogs: React.FC = () => {
             </tr>
           </thead>
           <tbody>
-            {logs
+            {displayLogs
               .filter(log => showArchived || !log.archived)
               .map((log, idx) => (
               <tr key={log.id ?? `${log.timestamp}-${log.event_type}-${idx}`}>

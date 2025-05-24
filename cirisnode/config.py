@@ -1,5 +1,4 @@
 from pydantic_settings import BaseSettings
-
 from pydantic import Extra
 
 class Settings(BaseSettings):
@@ -12,9 +11,6 @@ class Settings(BaseSettings):
     matrix_room_id: str = ""
     node_api_url: str = ""
     REDIS_URL: str = "redis://localhost:6379/0"  # Default Redis URL
-
-    class Config:
-        extra = Extra.allow
     app_name: str = "CIRISNode"
     max_concurrent_requests: int = 100
     JWT_SECRET: str = "your-jwt-secret"  # Replace with a secure secret
@@ -24,6 +20,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = Extra.allow  # Allow extra env vars (e.g., frontend-only vars in .env)
 
 settings = Settings()
 

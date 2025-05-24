@@ -12,8 +12,11 @@ class LLMConfigV1(BaseModel):
         return v
 
     @field_validator('model_name')
-    def model_required_if_api_base(cls, v, values):
-        if values.get('api_base') and not v:
+    
+    def model_required_if_api_base(cls, v, info):
+        api_base = info.data.get('api_base') if hasattr(info, 'data') else None
+        if api_base and not v:
+
             raise ValueError("model_name is required if api_base is set")
         return v
 

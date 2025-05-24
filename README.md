@@ -97,6 +97,16 @@ This README is licensed under Apache 2.0 © 2025 CIRIS AI Project
 - JWT-based route protection added using FastAPI middleware
 - Token issued via `/auth/token`
 - All sensitive endpoints require `Authorization: Bearer <token>`
+- Discord and Google logins are available via the dashboard. Configure
+  `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`, and
+  `GOOGLE_CLIENT_SECRET` in your environment.
+
+##### Roles
+
+- `admin` – full access including config updates
+- `wise_authority` – read-only access to config
+- `discord_user` – authenticated via Discord OAuth
+- `anonymous` – default for new accounts
 
 ---
 

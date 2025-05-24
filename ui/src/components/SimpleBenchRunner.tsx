@@ -73,7 +73,9 @@ const SimpleBenchRunner: React.FC = () => {
         setLoadingOllamaModels(true);
         setError(null);
         try {
-          const res = await axios.get<{ models: { name: string }[] }>("http://127.0.0.1:11434/api/tags");
+          // Use environment variable for Ollama base URL
+          const ollamaBaseUrl = process.env.NEXT_PUBLIC_OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
+          const res = await axios.get<{ models: { name: string }[] }>(`${ollamaBaseUrl}/api/tags`);
           if (res.data.models && res.data.models.length > 0) {
             console.log("Ollama models API response:", res.data.models);
 const modelNames = res.data.models.map(m => (typeof m === 'string' ? m : m.name));
@@ -164,8 +166,10 @@ setOllamaModels(modelNames);
     try {
       // Call the updated /api/v1/simplebench/run endpoint
       const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0LXVzZXIiLCJuYW1lIjoiVGVzdCBVc2VyIiwiaWF0IjoxNjgwMDAwMDAwfQ.abc123"; // Replace with the generated JWT
+      // Use environment variable for API base URL
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || '';
       const res = await axios.post<{ job_id: string; results: BenchResult[] }>(
-        "http://127.0.0.1:8000/api/v1/simplebench/run-sync",
+        `${apiBaseUrl}/api/v1/simplebench/run-sync`,
         requestBody,
         { headers: { Authorization: `Bearer ${token}` } }
       );

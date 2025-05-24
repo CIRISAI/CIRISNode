@@ -1,5 +1,10 @@
 from fastapi.testclient import TestClient
 from cirisnode.main import app
+from cirisnode.db.init_db import initialize_database
+
+initialize_database()
+import jwt
+from cirisnode.api.auth.routes import SECRET_KEY, ALGORITHM
 
 client = TestClient(app)
 
@@ -9,6 +14,9 @@ def test_get_token():
     data = response.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
+    decoded = jwt.decode(data["access_token"], SECRET_KEY, algorithms=[ALGORITHM])
+    assert decoded["role"] == "anonymous"
+
 
 def test_refresh_token():
     # First, get a token
@@ -21,3 +29,5 @@ def test_refresh_token():
     data = response.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
+    decoded = jwt.decode(data["access_token"], SECRET_KEY, algorithms=[ALGORITHM])
+    assert decoded["role"] == "anonymous"

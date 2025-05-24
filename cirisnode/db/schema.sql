@@ -38,6 +38,16 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     archived INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password TEXT,
+    role TEXT NOT NULL DEFAULT 'anonymous',
+    groups TEXT DEFAULT '', -- comma-separated group names
+    oauth_provider TEXT,    -- e.g. 'google', 'discord'
+    oauth_sub TEXT          -- subject/ID from OAuth provider
+);
+
 -- Versioned configuration stored as a single JSON blob
 CREATE TABLE IF NOT EXISTS config (
     id INTEGER PRIMARY KEY CHECK (id = 1),
