@@ -1,10 +1,14 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Header
 from pydantic import BaseModel, ValidationError
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from cirisnode.database import get_db
 import sqlite3
 from cirisnode.utils.encryption import encrypt_data, decrypt_data
+from cirisnode.utils.audit import write_audit_log
+from cirisnode.utils.rbac import require_role
+from cirisnode.api.auth.routes import get_actor_from_token
+import uuid
 import logging
 
 # Setup logging
@@ -33,6 +37,21 @@ class DeferralRequest(BaseModel):
     reason: str = None
     target_object: str = None
 
+
+@wa_router.post(
+    "/tokens",
+    dependencies=[Depends(require_role(["admin"]))],
+    response_model=dict,
+)
+def create_agent_token(db: sqlite3.Connection = Depends(get_db), Authorization: str = Header(...)):
+    token = uuid.uuid4().hex
+    conn = db
+    actor = get_actor_from_token(Authorization)
+    conn.execute("INSERT INTO agent_tokens (token, owner) VALUES (?, ?)", (token, actor))
+    conn.commit()
+    write_audit_log(conn, actor=actor, event_type="create_agent_token", payload={"token": token})
+    return {"token": token}
+
 @wa_router.post("/submit", response_model=dict)
 def submit_wbd_task(request: WBDSubmitRequest, db: sqlite3.Connection = Depends(get_db)):
     """Submit a new WBD task for review."""
@@ -45,13 +64,13 @@ def submit_wbd_task(request: WBDSubmitRequest, db: sqlite3.Connection = Depends(
         db.commit()
         
         # Log the WBD task submission to audit
-        from cirisnode.api.audit.routes import log_audit_event
-        event_payload = {
-            "action": "submit_wbd_task",
-            "task_id": task_id,
-            "agent_task_id": request.agent_task_id
-        }
-        log_audit_event(db, "system", "wbd_submit", event_payload)
+        write_audit_log(
+            db,
+            actor="system",
+            event_type="wbd_submit",
+            payload={"task_id": task_id},
+            details={"agent_task_id": request.agent_task_id}
+        )
         
         logger.info(f"WBD task submitted with ID: {task_id}, Agent Task ID: {request.agent_task_id}")
         return {
@@ -85,13 +104,13 @@ def get_wbd_tasks(state: Optional[str] = None, since: Optional[str] = None, db: 
             task_id = task[0]
             db.execute("UPDATE wbd_tasks SET status = 'sla_breached' WHERE id = ?", (task_id,))
             # Log the SLA breach to audit
-            from cirisnode.api.audit.routes import log_audit_event
-            event_payload = {
-                "action": "auto_escalate_wbd_task",
-                "task_id": task_id,
-                "reason": "SLA breach (24h)"
-            }
-            log_audit_event(db, "system", "wbd_sla_breach", event_payload)
+            write_audit_log(
+                db,
+                actor="system",
+                event_type="wbd_sla_breach",
+                payload={"task_id": task_id},
+                details={"reason": "SLA breach (24h)"}
+            )
             logger.info(f"WBD task {task_id} auto-escalated due to SLA breach")
         
         db.commit()
@@ -138,15 +157,14 @@ def resolve_wbd_task(task_id: int, request: WBDResolveRequest, db: sqlite3.Conne
             (request.decision, request.comment, task_id)
         )
         db.commit()
-        # Log the WBD task resolution to audit (skip actor for now)
-        from cirisnode.api.audit.routes import log_audit_event
-        event_payload = {
-            "action": "resolve_wbd_task",
-            "task_id": task_id,
-            "decision": request.decision,
-            "comment": request.comment
-        }
-        log_audit_event(db, "system", "wbd_resolve", event_payload)
+        # Log the WBD task resolution to audit
+        write_audit_log(
+            db,
+            actor="system",
+            event_type="wbd_resolve",
+            payload={"task_id": task_id},
+            details={"decision": request.decision, "comment": request.comment}
+        )
         return {
             "status": "success",
             "task_id": task_id,

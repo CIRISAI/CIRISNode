@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Header
 from pydantic import BaseModel
 from typing import Optional
 from cirisnode.database import get_db
@@ -13,12 +13,26 @@ class AgentEventRequest(BaseModel):
     event: dict
 
 @agent_router.post("/events")
-async def post_agent_event(request: AgentEventRequest, db=Depends(get_db)):
+async def post_agent_event(
+    request: AgentEventRequest,
+    db=Depends(get_db),
+    x_agent_token: str | None = Header(None)
+):
     """
     Agents push Task / Thought / Action events for observability.
     """
     event_id = str(uuid.uuid4())
     conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
+    if x_agent_token:
+        token_row = conn.execute(
+            "SELECT token FROM agent_tokens WHERE token = ?",
+            (x_agent_token,)
+        ).fetchone()
+        if not token_row:
+            raise HTTPException(status_code=401, detail="Invalid agent token")
+        actor = x_agent_token
+    else:
+        actor = request.agent_uid
     conn.execute(
         """
         INSERT INTO agent_events (id, node_ts, agent_uid, event_json)
@@ -32,7 +46,7 @@ async def post_agent_event(request: AgentEventRequest, db=Depends(get_db)):
         from cirisnode.utils.audit import write_audit_log
         write_audit_log(
             db=conn,
-            actor=request.agent_uid,
+            actor=actor,
             event_type="agent_event",
             payload={"event_id": event_id},
             details=request.event

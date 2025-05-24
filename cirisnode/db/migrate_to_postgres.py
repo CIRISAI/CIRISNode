@@ -23,7 +23,7 @@ def migrate_sqlite_to_postgres():
     postgres_cursor = postgres_conn.cursor()
 
     # Define tables to migrate
-    tables = ["jobs", "wbd_tasks", "audit", "agent_events"]
+    tables = ["jobs", "wbd_tasks", "audit", "agent_events", "agent_tokens"]
 
     for table in tables:
         # Fetch data from SQLite

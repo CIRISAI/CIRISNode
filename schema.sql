@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS agent_events (
     event_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agent_tokens (
+    token TEXT PRIMARY KEY,
+    owner TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Table for audit logs (detailed)
 CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -36,16 +36,17 @@ def write_audit_log(
     except Exception as e:
         print(f"ERROR: Failed to write audit log: {e}")
 
-def fetch_audit_logs(db, limit=100, offset=0):
-    cur = db.execute(
-        """
-        SELECT id, timestamp, actor, event_type, payload_sha256, details
-        FROM audit_logs
-        ORDER BY timestamp DESC
-        LIMIT ? OFFSET ?
-        """,
-        (limit, offset)
+def fetch_audit_logs(db, limit=100, offset=0, actor: Optional[str] = None):
+    query = (
+        "SELECT id, timestamp, actor, event_type, payload_sha256, details FROM audit_logs"
     )
+    params = []
+    if actor is not None:
+        query += " WHERE actor = ?"
+        params.append(actor)
+    query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    cur = db.execute(query, params)
     rows = cur.fetchall()
     return [
         {

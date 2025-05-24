@@ -204,17 +204,15 @@ Once the server is running:
 - Access the health check endpoint at `http://localhost:8000/api/v1/health` to confirm the server is operational (should return `{"status": "ok", "message": "Service is healthy", "timestamp": "2025-05-08T14:52:00Z"}`).
 - Explore the API documentation at `http://localhost:8000/docs` (available in `dev` or `test` environments).
 
-#### Step 6: Run the Streamlit Frontend Locally
+#### Step 6: Run the Next.js Frontend Locally
 
-To run the Streamlit frontend application, use the following command in a separate terminal:
+The user interface lives in `ui/`. Start the development server with:
 
 ```bash
-export ENVIRONMENT='dev' && streamlit run frontend_eee/main.py
+cd ui && npm run dev
 ```
 
-- **`ENVIRONMENT='dev'`**: Ensures the frontend connects to the development backend.
-- The frontend will run on `http://localhost:8501`.
-- Use the web interface to interact with CIRISNode functionalities, such as submitting deferral requests and managing benchmarks.
+The app will be available at `http://localhost:3000`.
 
 #### Step 7: Run the Test Suite Locally
 

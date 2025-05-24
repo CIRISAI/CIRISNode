@@ -1,6 +1,7 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import axios from "axios";
+import { useSession } from "next-auth/react";
 
 interface AuditLog {
   id: string;
@@ -22,16 +23,19 @@ interface Result {
 }
 
 const AuditLogs: React.FC = () => {
+  const { data: session } = useSession();
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
 
+  // Fetch logs handler for manual refresh
   const fetchLogs = async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await axios.get("/api/v1/audit/logs");
+      const endpoint = session ? "/api/v1/audit/logs/me" : "/api/v1/audit/public";
+      const res = await axios.get(endpoint);
       setLogs(res.data.logs || []);
     } catch {
       setError("Failed to fetch audit logs");
@@ -42,6 +46,7 @@ const AuditLogs: React.FC = () => {
 
   useEffect(() => {
     fetchLogs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // If not loading and logs is empty, show a test log

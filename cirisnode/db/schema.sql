@@ -28,8 +28,14 @@ CREATE TABLE IF NOT EXISTS agent_events (
     archived INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS agent_tokens (
+    token TEXT PRIMARY KEY,
+    owner TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
-    id SERIAL PRIMARY KEY,
+    id SERIAL PRIMARY KEY, -- This is correct for PostgreSQL
     timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     actor VARCHAR(128),
     event_type VARCHAR(64) NOT NULL,
@@ -39,7 +45,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY, -- Changed for PostgreSQL
     username TEXT UNIQUE NOT NULL,
     password TEXT,
     role TEXT NOT NULL DEFAULT 'anonymous',
