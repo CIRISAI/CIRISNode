@@ -43,6 +43,7 @@ services:
   ui:
     build:
       context: ./ui
+    image: alignordie/cirisnode:ui-latest
     ports:
       - "3004:3000"
     env_file:
