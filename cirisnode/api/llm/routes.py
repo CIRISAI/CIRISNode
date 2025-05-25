@@ -1,8 +1,11 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
+import os
 
 llm_router = APIRouter(tags=["llm"], prefix="/api/v1")
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 
 class LLMTestRequest(BaseModel):
     provider: str
@@ -21,7 +24,7 @@ async def test_llm_connection(request: LLMTestRequest):
             import httpx
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    "http://localhost:11434/api/generate",
+                    f"{OLLAMA_BASE_URL}/api/generate",
                     json={
                         "model": request.model,
                         "prompt": request.prompt,

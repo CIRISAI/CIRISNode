@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const API_BASE = "/api/v1";
 
 interface User {
   id: number;
@@ -40,7 +40,7 @@ export default function AdminTab() {
     setLoading(true);
     setError(null);
     try {
-      const res = await axios.get(`${API_BASE}/api/auth/users`, {
+      const res = await axios.get(`${API_BASE}/auth/users`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setUsers(res.data);
@@ -70,17 +70,17 @@ export default function AdminTab() {
     setError(null);
     try {
       await axios.post(
-        `${API_BASE}/api/auth/users/${encodeURIComponent(editUser.username)}/role`,
+        `${API_BASE}/auth/users/${encodeURIComponent(editUser.username)}/role`,
         { role: editRole },
         { headers: { Authorization: `Bearer ${token}` } }
       );
       await axios.post(
-        `${API_BASE}/api/auth/users/${encodeURIComponent(editUser.username)}/groups`,
+        `${API_BASE}/auth/users/${encodeURIComponent(editUser.username)}/groups`,
         { groups: editGroups },
         { headers: { Authorization: `Bearer ${token}` } }
       );
       await axios.post(
-        `${API_BASE}/api/auth/users/${encodeURIComponent(editUser.username)}/oauth`,
+        `${API_BASE}/auth/users/${encodeURIComponent(editUser.username)}/oauth`,
         { oauth_provider: editOAuthProvider, oauth_sub: editOAuthSub },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -100,7 +100,7 @@ export default function AdminTab() {
     setError(null);
     try {
       await axios.delete(
-        `${API_BASE}/api/auth/users/${encodeURIComponent(deleteUser.username)}`,
+        `${API_BASE}/auth/users/${encodeURIComponent(deleteUser.username)}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       setDeleteUser(null);

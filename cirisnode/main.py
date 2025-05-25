@@ -10,12 +10,15 @@ from cirisnode.api.agent.routes import agent_router
 from cirisnode.api.auth.routes import auth_router
 from cirisnode.api.wa.routes import wa_router
 from cirisnode.api.config.routes import config_router
+import os
 
 app = FastAPI()
 
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "https://node0.ciris.ai")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[FRONTEND_ORIGIN],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

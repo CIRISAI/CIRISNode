@@ -18,7 +18,8 @@ const TestConnection = () => {
         setLoadingModels(true);
         setError(null); // Clear previous errors
         try {
-          const res = await axios.get(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/ollama-models`);
+          const ollamaBaseUrl = process.env.NEXT_PUBLIC_OLLAMA_BASE_URL || 'http://localhost:11434';
+          const res = await axios.get(`${ollamaBaseUrl}/api/tags`);
           if (res.data?.models?.length > 0) {
             setOllamaModels(res.data.models);
             setSelectedOllamaModel(res.data.models[0]);
@@ -64,7 +65,7 @@ const requestBody = {
 };
 
     try {
-      const res = await axios.post(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/test-llm`, requestBody);
+      const res = await axios.post(`/api/v1/test-llm`, requestBody);
       setResponse(res.data.message); // Display raw LLM response
     } catch (error) {
       setError('Failed to connect to LLM: ' + (error.response?.data?.detail || error.message));

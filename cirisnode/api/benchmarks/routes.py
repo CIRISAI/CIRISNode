@@ -8,6 +8,8 @@ from datetime import datetime
 from fastapi.responses import JSONResponse
 import jwt
 
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+
 benchmarks_router = APIRouter(prefix="/api/v1/benchmarks", tags=["benchmarks"])
 simplebench_router = APIRouter(prefix="/api/v1/simplebench", tags=["simplebench"])
 
@@ -116,7 +118,7 @@ async def run_simplebench_sync(payload: dict, db=Depends(get_db)):
             elif provider == "ollama":
                 # Query Ollama API
                 response = requests.post(
-                    f"http://127.0.0.1:11434/api/generate",
+                    f"{OLLAMA_BASE_URL}/api/generate",
                     json={"model": model, "prompt": prompt}
                 )
                 response.raise_for_status()

@@ -7,6 +7,7 @@ import DiscordTab from "../components/DiscordTab";
 import WiseAuthorityTab from "../components/WiseAuthorityTab";
 import AdminTab from "../components/AdminTab";
 import Head from "next/head";
+import Link from "next/link";
 
 export default function Home() {
   const { data: session } = useSession();
@@ -24,7 +25,7 @@ export default function Home() {
     const fetchUserInfo = async () => {
       try {
         const res = await fetch(
-          process.env.NEXT_PUBLIC_API_BASE_URL + "/api/auth/me",
+          "/api/auth/me",
           {
             headers: {
               "x-user-email": email,
@@ -70,6 +71,18 @@ export default function Home() {
               </a>{" "}
               for more information.
             </p>
+            {/* --- TOP NAVIGATION TABS --- */}
+            <nav className="flex flex-wrap justify-center gap-2 mb-4 border-b border-gray-200 pb-2">
+              <Link href="/" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Home</Link>
+              <Link href="#audit" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Audit Logs</Link>
+              <Link href="#admin" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Admin</Link>
+              <Link href="#wise" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Wise Authority</Link>
+              <Link href="#discord" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Discord</Link>
+              <Link href="#test" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Test Connection</Link>
+              <Link href="#bench" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Bench</Link>
+              <Link href="#health" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Health</Link>
+            </nav>
+            {/* --- END NAVIGATION --- */}
             <div className="flex flex-col sm:flex-row justify-center gap-4 mb-4">
               <button
                 onClick={() => signIn("discord")}
@@ -124,10 +137,13 @@ export default function Home() {
               )}
             </div>
             <div className="px-4 py-6 sm:px-0 space-y-8">
-              <AuditLogs />
-              {groups.includes("discord_user") && <DiscordTab />}
-              {role === "wise_authority" && <WiseAuthorityTab />}
-              {role === "admin" && <AdminTab />}
+              <div id="audit"><AuditLogs /></div>
+              <div id="admin"><AdminTab /></div>
+              <div id="wise"><WiseAuthorityTab /></div>
+              <div id="discord"><DiscordTab /></div>
+              <div id="test">{/* TODO: import and render TestConnection component here */}</div>
+              <div id="bench">{/* TODO: import and render Bench/SimpleBenchRunner component here */}</div>
+              <div id="health">{/* TODO: import and render HealthStatus component here */}</div>
             </div>
           </div>
         </main>
