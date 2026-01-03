@@ -1,469 +1,541 @@
 "use client";
-import React, { useState, useEffect, useCallback } from 'react';
 
-interface ReportMetadata {
-  report_id: string;
-  batch_id: string;
-  model_name?: string;
-  accuracy?: number;
-  format: string;
-  created_at: string;
-  file_path: string;
-  file_size: number;
-  signature?: {
-    algorithm: string;
-    content_hash: string;
-    timestamp: string;
-    signature: string;
-  };
-}
+import React, { useState, useEffect, useCallback } from "react";
 
-interface CategoryResult {
-  total: number;
-  correct: number;
-  accuracy: number;
-  avg_latency_ms: number;
-  errors?: number;
-}
-
-interface BenchmarkSummary {
-  batch_id: string;
+interface ReportResult {
+  id: string;
   model_name: string;
-  identity_id: string;
-  guidance_id: string;
-  total_scenarios: number;
-  correct_predictions: number;
-  overall_accuracy: number;
-  avg_latency_ms: number;
-  total_errors: number;
-  categories: CategoryResult[];
-  started_at: string;
-  completed_at: string;
-  processing_time_ms: number;
+  report_name: string;
+  created_at: string;
+  scores: Record<string, number>;
+  status: string;
 }
 
-interface ScenarioDetail {
-  scenario_id: string;
-  category: string;
-  input_text: string;
-  expected_label: number | null;
-  predicted_label: number | null;
-  model_response: string;
-  is_correct: boolean;
-  latency_ms: number;
-  error?: string | null;
+interface GitHubConfig {
+  token: string;
+  repo: string;
+  branch: string;
 }
 
-interface ReportGeneratorProps {
-  apiBaseUrl?: string;
-  benchmarkResult?: {
-    batch_id: string;
-    summary: {
-      total: number;
-      correct: number;
-      accuracy: number;
-      avg_latency_ms: number;
-      by_category: Record<string, CategoryResult>;
-      errors: number;
-    };
-    identity_id: string;
-    guidance_id: string;
-    processing_time_ms: number;
-    results: ScenarioDetail[];
-  } | null;
-}
-
-const ReportGenerator: React.FC<ReportGeneratorProps> = ({ apiBaseUrl = '', benchmarkResult }) => {
-  const [reports, setReports] = useState<ReportMetadata[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-
-  // Report configuration
-  const [format, setFormat] = useState<'markdown' | 'html' | 'json'>('markdown');
-  const [includeScenarios, setIncludeScenarios] = useState(true);
-  const [signReport, setSignReport] = useState(true);
-  const [jekyllFrontmatter, setJekyllFrontmatter] = useState(true);
-  const [title, setTitle] = useState('');
-  const [modelName, setModelName] = useState('');
-
-  const fetchReports = useCallback(async () => {
-    setLoading(true);
-    try {
-      const response = await fetch(`${apiBaseUrl}/reports/`);
-      if (!response.ok) throw new Error(`Failed to fetch reports: ${response.status}`);
-      const data = await response.json();
-      setReports(data.reports || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch reports');
-    } finally {
-      setLoading(false);
-    }
-  }, [apiBaseUrl]);
+// GitHub Config Modal Component
+function GitHubConfigModal({
+  isOpen,
+  onClose,
+  config,
+  onSave,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  config: GitHubConfig;
+  onSave: (config: GitHubConfig) => void;
+}) {
+  const [localConfig, setLocalConfig] = useState<GitHubConfig>(config);
 
   useEffect(() => {
-    fetchReports();
-  }, [fetchReports]);
+    setLocalConfig(config);
+  }, [config]);
 
-  const handleGenerateReport = async () => {
-    if (!benchmarkResult) {
-      setError('No benchmark result to generate report from. Run a benchmark first.');
+  if (!isOpen) return null;
+
+  const handleSave = () => {
+    onSave(localConfig);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md border border-gray-700">
+        <h3 className="text-xl font-semibold text-white mb-4">GitHub Configuration</h3>
+        
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              GitHub Personal Access Token
+            </label>
+            <input
+              type="password"
+              value={localConfig.token}
+              onChange={(e) => setLocalConfig({ ...localConfig, token: e.target.value })}
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="ghp_xxxxxxxxxxxx"
+            />
+            <p className="mt-1 text-xs text-gray-400">
+              Requires repo scope. Create at{" "}
+              <a
+                href="https://github.com/settings/tokens"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-400 hover:underline"
+              >
+                github.com/settings/tokens
+              </a>
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Repository (owner/repo)
+            </label>
+            <input
+              type="text"
+              value={localConfig.repo}
+              onChange={(e) => setLocalConfig({ ...localConfig, repo: e.target.value })}
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="username/ethics-benchmarks"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Branch
+            </label>
+            <input
+              type="text"
+              value={localConfig.branch}
+              onChange={(e) => setLocalConfig({ ...localConfig, branch: e.target.value })}
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="gh-pages"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end space-x-3 mt-6">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded-md transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors"
+          >
+            Save Configuration
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function ReportGenerator() {
+  const [results, setResults] = useState<ReportResult[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedResults, setSelectedResults] = useState<Set<string>>(new Set());
+  const [generating, setGenerating] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishToGitHub, setPublishToGitHub] = useState(false);
+  const [generateAllFormats, setGenerateAllFormats] = useState(true);
+  const [showGitHubModal, setShowGitHubModal] = useState(false);
+  const [gitHubConfig, setGitHubConfig] = useState<GitHubConfig>({
+    token: "",
+    repo: "",
+    branch: "gh-pages",
+  });
+  const [publishStatus, setPublishStatus] = useState<string | null>(null);
+
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const STORAGE_KEY = "he300_github_config";
+
+  // Load GitHub config from localStorage on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        setGitHubConfig(parsed);
+      }
+    } catch (e) {
+      console.error("Failed to load GitHub config from localStorage:", e);
+    }
+  }, []);
+
+  // Save GitHub config to localStorage
+  const saveGitHubConfig = useCallback((config: GitHubConfig) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+      setGitHubConfig(config);
+    } catch (e) {
+      console.error("Failed to save GitHub config to localStorage:", e);
+    }
+  }, []);
+
+  // Fetch available results
+  useEffect(() => {
+    const fetchResults = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch(`${API_BASE}/api/reports/results`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch results: ${response.statusText}`);
+        }
+        const data = await response.json();
+        setResults(data.results || []);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to fetch results");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchResults();
+  }, [API_BASE]);
+
+  const toggleResultSelection = (id: string) => {
+    const newSelected = new Set(selectedResults);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedResults(newSelected);
+  };
+
+  const selectAll = () => {
+    if (selectedResults.size === results.length) {
+      setSelectedResults(new Set());
+    } else {
+      setSelectedResults(new Set(results.map((r) => r.id)));
+    }
+  };
+
+  const handleGenerateReports = async () => {
+    if (selectedResults.size === 0) {
+      setError("Please select at least one result to generate reports");
+      return;
+    }
+
+    // Check GitHub config if publishing is enabled
+    if (publishToGitHub && (!gitHubConfig.token || !gitHubConfig.repo)) {
+      setShowGitHubModal(true);
       return;
     }
 
     setGenerating(true);
     setError(null);
-    setSuccess(null);
+    setPublishStatus(null);
 
     try {
-      // Convert benchmark result to report format
-      const now = new Date().toISOString();
-      const summary: BenchmarkSummary = {
-        batch_id: benchmarkResult.batch_id,
-        model_name: modelName || 'Unknown Model',
-        identity_id: benchmarkResult.identity_id,
-        guidance_id: benchmarkResult.guidance_id,
-        total_scenarios: benchmarkResult.summary.total,
-        correct_predictions: benchmarkResult.summary.correct,
-        overall_accuracy: benchmarkResult.summary.accuracy,
-        avg_latency_ms: benchmarkResult.summary.avg_latency_ms,
-        total_errors: benchmarkResult.summary.errors,
-        categories: Object.entries(benchmarkResult.summary.by_category).map(([cat, stats]) => ({
-          category: cat,
-          total: stats.total,
-          correct: stats.correct,
-          accuracy: stats.accuracy,
-          avg_latency_ms: stats.avg_latency_ms,
-          errors: stats.errors || 0,
-        })),
-        started_at: now,
-        completed_at: now,
-        processing_time_ms: benchmarkResult.processing_time_ms,
-      };
+      const formats = generateAllFormats
+        ? ["markdown", "html", "json"]
+        : ["markdown"];
 
-      const response = await fetch(`${apiBaseUrl}/reports/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      // Generate reports for selected results
+      const response = await fetch(`${API_BASE}/api/reports/generate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          batch_id: benchmarkResult.batch_id,
-          summary,
-          scenarios: includeScenarios ? benchmarkResult.results : [],
-          format,
-          include_scenarios: includeScenarios,
-          sign_report: signReport,
-          jekyll_frontmatter: jekyllFrontmatter,
-          title: title || undefined,
-          description: title || undefined,
+          result_ids: Array.from(selectedResults),
+          formats: formats,
         }),
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.detail || `Failed to generate report: ${response.status}`);
+        throw new Error(`Failed to generate reports: ${response.statusText}`);
       }
 
       const data = await response.json();
-      setSuccess(`Report generated: ${data.report_id}`);
-      fetchReports();
-      
+      setPublishStatus(`Generated ${data.reports?.length || 0} reports`);
+
+      // If publishing to GitHub is enabled, deploy the reports
+      if (publishToGitHub) {
+        setPublishing(true);
+        await handleGitHubDeploy();
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate report');
+      setError(err instanceof Error ? err.message : "Failed to generate reports");
     } finally {
       setGenerating(false);
+      setPublishing(false);
     }
   };
 
-  const handleDownload = async (reportId: string) => {
+  const handleGitHubDeploy = async () => {
     try {
-      const response = await fetch(`${apiBaseUrl}/reports/download/${reportId}`);
-      if (!response.ok) throw new Error('Download failed');
-      
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `report_${reportId}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      a.remove();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Download failed');
-    }
-  };
-
-  const handleDelete = async (reportId: string) => {
-    if (!confirm(`Delete report ${reportId}?`)) return;
-    
-    try {
-      const response = await fetch(`${apiBaseUrl}/reports/${reportId}`, {
-        method: 'DELETE',
+      const response = await fetch(`${API_BASE}/api/github/deploy`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          token: gitHubConfig.token,
+          repo: gitHubConfig.repo,
+          branch: gitHubConfig.branch,
+          result_ids: Array.from(selectedResults),
+        }),
       });
-      if (!response.ok) throw new Error('Delete failed');
-      fetchReports();
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `Deploy failed: ${response.statusText}`);
+      }
+
+      await response.json();
+      setPublishStatus(
+        `✓ Published to GitHub Pages! View at: https://${gitHubConfig.repo.split("/")[0]}.github.io/${gitHubConfig.repo.split("/")[1]}/`
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Delete failed');
+      setError(err instanceof Error ? err.message : "Failed to deploy to GitHub");
     }
   };
 
-  const formatSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   };
 
-  const formatDate = (iso: string): string => {
-    return new Date(iso).toLocaleString();
+  const getOverallScore = (scores: Record<string, number>) => {
+    const values = Object.values(scores);
+    if (values.length === 0) return 0;
+    return (values.reduce((a, b) => a + b, 0) / values.length) * 100;
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
 
   return (
-    <div className="bg-white shadow rounded-lg overflow-hidden">
-      <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-medium text-gray-900">📄 Report Generator</h3>
-            <p className="mt-1 text-sm text-gray-500">
-              Generate signed static reports for Jekyll/GitHub Pages
-            </p>
-          </div>
+    <div className="space-y-6">
+      <GitHubConfigModal
+        isOpen={showGitHubModal}
+        onClose={() => setShowGitHubModal(false)}
+        config={gitHubConfig}
+        onSave={saveGitHubConfig}
+      />
+
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Report Generator</h2>
+          <p className="text-gray-400 mt-1">
+            Select benchmark results to generate and optionally publish reports
+          </p>
+        </div>
+        <button
+          onClick={() => setShowGitHubModal(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-md transition-colors"
+        >
+          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
+          </svg>
+          Configure GitHub
+        </button>
+      </div>
+
+      {/* Error Display */}
+      {error && (
+        <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-md">
+          {error}
           <button
-            onClick={fetchReports}
-            disabled={loading}
-            className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+            onClick={() => setError(null)}
+            className="float-right text-red-200 hover:text-white"
           >
-            {loading ? 'Loading...' : '↻ Refresh'}
+            ×
           </button>
         </div>
+      )}
+
+      {/* Success/Status Display */}
+      {publishStatus && (
+        <div className="bg-green-900/50 border border-green-700 text-green-200 px-4 py-3 rounded-md">
+          {publishStatus}
+        </div>
+      )}
+
+      {/* Options Panel */}
+      <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <h3 className="text-lg font-medium text-white mb-4">Generation Options</h3>
+        <div className="flex flex-wrap gap-6">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={generateAllFormats}
+              onChange={(e) => setGenerateAllFormats(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-gray-800"
+            />
+            <span className="text-gray-300">Generate all formats (Markdown, HTML, JSON)</span>
+          </label>
+
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={publishToGitHub}
+              onChange={(e) => setPublishToGitHub(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-gray-800"
+            />
+            <span className="text-gray-300">Publish to GitHub Pages</span>
+            {publishToGitHub && gitHubConfig.token && (
+              <span className="text-green-400 text-sm">(configured)</span>
+            )}
+            {publishToGitHub && !gitHubConfig.token && (
+              <span className="text-yellow-400 text-sm">(not configured)</span>
+            )}
+          </label>
+        </div>
       </div>
 
-      {error && (
-        <div className="px-4 py-3 bg-red-50 border-b border-red-200">
-          <p className="text-sm text-red-700">⚠️ {error}</p>
+      {/* Results Table */}
+      <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+        <div className="px-4 py-3 bg-gray-750 border-b border-gray-700 flex justify-between items-center">
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={selectedResults.size === results.length && results.length > 0}
+                onChange={selectAll}
+                className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-gray-800"
+              />
+              <span className="text-gray-300 text-sm">Select All</span>
+            </label>
+            <span className="text-gray-400 text-sm">
+              {selectedResults.size} of {results.length} selected
+            </span>
+          </div>
+          <button
+            onClick={handleGenerateReports}
+            disabled={selectedResults.size === 0 || generating || publishing}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-md transition-colors flex items-center gap-2"
+          >
+            {generating || publishing ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                {publishing ? "Publishing..." : "Generating..."}
+              </>
+            ) : (
+              <>
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                  />
+                </svg>
+                Generate Reports
+              </>
+            )}
+          </button>
         </div>
-      )}
 
-      {success && (
-        <div className="px-4 py-3 bg-green-50 border-b border-green-200">
-          <p className="text-sm text-green-700">✅ {success}</p>
-        </div>
-      )}
-
-      {/* Generate Report Form */}
-      <div className="p-4 bg-gray-50 border-b border-gray-200">
-        <h4 className="text-sm font-medium text-gray-900 mb-4">Generate New Report</h4>
-        
-        {!benchmarkResult ? (
-          <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
-            <p className="text-sm text-yellow-800">
-              ℹ️ Run a benchmark first to generate a report. The report will be based on the most recent benchmark result.
-            </p>
+        {results.length === 0 ? (
+          <div className="px-4 py-8 text-center text-gray-400">
+            No benchmark results available. Run some benchmarks first!
           </div>
         ) : (
-          <div className="space-y-4">
-            <div className="p-3 bg-white rounded border border-gray-200">
-              <p className="text-sm text-gray-600">
-                <strong>Batch:</strong> {benchmarkResult.batch_id} |
-                <strong> Scenarios:</strong> {benchmarkResult.summary.total} |
-                <strong> Accuracy:</strong> {(benchmarkResult.summary.accuracy * 100).toFixed(1)}%
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {/* Format */}
-              <div>
-                <label htmlFor="format" className="block text-sm font-medium text-gray-700">
-                  Output Format
-                </label>
-                <select
-                  id="format"
-                  value={format}
-                  onChange={(e) => setFormat(e.target.value as 'markdown' | 'html' | 'json')}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+          <table className="w-full">
+            <thead className="bg-gray-750">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider w-12">
+                  Select
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Model
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Benchmark
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Score
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Date
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Status
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-700">
+              {results.map((result) => (
+                <tr
+                  key={result.id}
+                  className={`hover:bg-gray-750 cursor-pointer ${
+                    selectedResults.has(result.id) ? "bg-blue-900/20" : ""
+                  }`}
+                  onClick={() => toggleResultSelection(result.id)}
                 >
-                  <option value="markdown">Markdown (Jekyll)</option>
-                  <option value="html">HTML (Standalone)</option>
-                  <option value="json">JSON (Machine-readable)</option>
-                </select>
-              </div>
-
-              {/* Model Name */}
-              <div>
-                <label htmlFor="modelName" className="block text-sm font-medium text-gray-700">
-                  Model Name
-                </label>
-                <input
-                  type="text"
-                  id="modelName"
-                  value={modelName}
-                  onChange={(e) => setModelName(e.target.value)}
-                  placeholder="e.g., gemma3:4b-it-q8_0"
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                />
-              </div>
-
-              {/* Title */}
-              <div>
-                <label htmlFor="title" className="block text-sm font-medium text-gray-700">
-                  Report Title (optional)
-                </label>
-                <input
-                  type="text"
-                  id="title"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Auto-generated if empty"
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                />
-              </div>
-            </div>
-
-            {/* Checkboxes */}
-            <div className="flex flex-wrap gap-6">
-              <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={includeScenarios}
-                  onChange={(e) => setIncludeScenarios(e.target.checked)}
-                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                />
-                Include scenario details
-              </label>
-              <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={signReport}
-                  onChange={(e) => setSignReport(e.target.checked)}
-                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                />
-                🔐 Sign report (integrity verification)
-              </label>
-              {format === 'markdown' && (
-                <label className="flex items-center gap-2 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={jekyllFrontmatter}
-                    onChange={(e) => setJekyllFrontmatter(e.target.checked)}
-                    className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  Jekyll YAML frontmatter
-                </label>
-              )}
-            </div>
-
-            <button
-              onClick={handleGenerateReport}
-              disabled={generating}
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {generating ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Generating...
-                </>
-              ) : (
-                <>📄 Generate Report</>
-              )}
-            </button>
-          </div>
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedResults.has(result.id)}
+                      onChange={() => toggleResultSelection(result.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-gray-800"
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="text-sm font-medium text-white">{result.model_name}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="text-sm text-gray-300">{result.report_name}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-2 bg-gray-700 rounded-full max-w-24">
+                        <div
+                          className="h-2 bg-gradient-to-r from-blue-500 to-green-500 rounded-full"
+                          style={{ width: `${getOverallScore(result.scores)}%` }}
+                        ></div>
+                      </div>
+                      <span className="text-sm text-gray-300">
+                        {getOverallScore(result.scores).toFixed(1)}%
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="text-sm text-gray-400">{formatDate(result.created_at)}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        result.status === "completed"
+                          ? "bg-green-900/50 text-green-300"
+                          : result.status === "running"
+                          ? "bg-yellow-900/50 text-yellow-300"
+                          : "bg-gray-700 text-gray-300"
+                      }`}
+                    >
+                      {result.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
 
-      {/* Reports List */}
-      <div className="divide-y divide-gray-200">
-        <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
-          <h4 className="text-sm font-medium text-gray-900">
-            Generated Reports ({reports.length})
-          </h4>
+      {/* GitHub Pages Link */}
+      {gitHubConfig.repo && (
+        <div className="text-center text-gray-400 text-sm">
+          GitHub Pages URL:{" "}
+          <a
+            href={`https://${gitHubConfig.repo.split("/")[0]}.github.io/${gitHubConfig.repo.split("/")[1]}/`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:underline"
+          >
+            https://{gitHubConfig.repo.split("/")[0]}.github.io/{gitHubConfig.repo.split("/")[1]}/
+          </a>
         </div>
-
-        {reports.length === 0 && !loading && (
-          <div className="px-4 py-8 text-center text-gray-500">
-            <p>No reports generated yet.</p>
-          </div>
-        )}
-
-        {reports.map((report) => (
-          <div key={report.report_id} className="px-4 py-4 flex items-center justify-between hover:bg-gray-50">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-lg">
-                  {report.format === 'markdown' ? '📝' : report.format === 'html' ? '🌐' : '📊'}
-                </span>
-                <code className="text-sm font-medium text-gray-900">{report.report_id}</code>
-                {report.signature && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
-                    🔐 Signed
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-4 mt-1 text-xs text-gray-500">
-                {report.model_name && <span className="font-medium text-indigo-600">🤖 {report.model_name}</span>}
-                {report.accuracy !== undefined && (
-                  <span className={`font-medium ${report.accuracy >= 0.8 ? 'text-green-600' : report.accuracy >= 0.5 ? 'text-yellow-600' : 'text-red-600'}`}>
-                    📊 {(report.accuracy * 100).toFixed(1)}%
-                  </span>
-                )}
-                <span>Batch: {report.batch_id}</span>
-                <span>Format: {report.format}</span>
-                <span>Size: {formatSize(report.file_size)}</span>
-                <span>Created: {formatDate(report.created_at)}</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 ml-4">
-              <button
-                onClick={() => handleDownload(report.report_id)}
-                className="inline-flex items-center px-2.5 py-1.5 border border-transparent text-xs font-medium rounded text-indigo-700 bg-indigo-100 hover:bg-indigo-200"
-              >
-                ⬇️ Download
-              </button>
-              <button
-                onClick={() => handleDelete(report.report_id)}
-                className="inline-flex items-center px-2.5 py-1.5 border border-transparent text-xs font-medium rounded text-red-700 bg-red-100 hover:bg-red-200"
-              >
-                🗑️ Delete
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* GitHub Pages Instructions */}
-      <div className="px-4 py-4 bg-gray-50 border-t border-gray-200">
-        <details>
-          <summary className="text-sm font-medium text-gray-700 cursor-pointer hover:text-gray-900">
-            📚 How to deploy reports to GitHub Pages
-          </summary>
-          <div className="mt-3 prose prose-sm text-gray-600">
-            <ol className="list-decimal list-inside space-y-2">
-              <li>Download the Markdown report with Jekyll frontmatter enabled</li>
-              <li>Add the report to your Jekyll site&apos;s <code>_posts/</code> or <code>reports/</code> directory</li>
-              <li>The report includes YAML frontmatter with metadata for Jekyll to process</li>
-              <li>Push to GitHub and enable GitHub Pages in repository settings</li>
-              <li>Reports include cryptographic signatures for integrity verification</li>
-            </ol>
-            <div className="mt-3 p-3 bg-white rounded border border-gray-200">
-              <p className="text-xs font-medium text-gray-700 mb-2">Example Jekyll layout for reports:</p>
-              <pre className="text-xs bg-gray-100 p-2 rounded overflow-x-auto">{`---
-layout: default
----
-<article class="report">
-  <h1>{{ page.title }}</h1>
-  <p class="meta">
-    Model: {{ page.model }} | 
-    Accuracy: {{ page.accuracy | times: 100 }}%
-  </p>
-  {{ content }}
-</article>`}</pre>
-            </div>
-          </div>
-        </details>
-      </div>
+      )}
     </div>
   );
-};
-
-export default ReportGenerator;
+}

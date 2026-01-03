@@ -3,7 +3,6 @@ import React, { useState, useEffect } from 'react';
 import ModelManager from '@/components/ModelManager';
 import HE300Runner from '@/components/HE300Runner';
 import ReportGenerator from '@/components/ReportGenerator';
-import GitHubPages from '@/components/GitHubPages';
 
 // Type for benchmark result that can be passed to report generator
 interface ScenarioResult {
@@ -41,6 +40,7 @@ interface BenchmarkResult {
   identity_id: string;
   guidance_id: string;
   processing_time_ms: number;
+  model_name?: string;
 }
 
 interface ApiHealth {
@@ -49,7 +49,7 @@ interface ApiHealth {
 }
 
 export default function HE300Dashboard() {
-  const [activeTab, setActiveTab] = useState<'models' | 'benchmark' | 'reports' | 'github'>('benchmark');
+  const [activeTab, setActiveTab] = useState<'models' | 'benchmark' | 'reports'>('benchmark');
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [apiHealth, setApiHealth] = useState<ApiHealth | null>(null);
   const [lastBenchmarkResult, setLastBenchmarkResult] = useState<BenchmarkResult | null>(null);
@@ -106,8 +106,7 @@ export default function HE300Dashboard() {
   const tabs = [
     { id: 'benchmark' as const, label: '🧪 Benchmark', icon: '🧪' },
     { id: 'models' as const, label: '🤖 Models', icon: '🤖' },
-    { id: 'reports' as const, label: '📄 Reports', icon: '📄' },
-    { id: 'github' as const, label: '🚀 GitHub Pages', icon: '🚀' },
+    { id: 'reports' as const, label: '📄 Reports & Publishing', icon: '📄' },
   ];
 
   return (
@@ -235,10 +234,6 @@ export default function HE300Dashboard() {
               apiBaseUrl={apiBaseUrl} 
               benchmarkResult={lastBenchmarkResult}
             />
-          )}
-
-          {activeTab === 'github' && (
-            <GitHubPages apiBaseUrl={apiBaseUrl} />
           )}
         </div>
 
