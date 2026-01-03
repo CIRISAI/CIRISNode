@@ -232,7 +232,6 @@ export default function HE300Dashboard() {
           {activeTab === 'reports' && (
             <ReportGenerator 
               apiBaseUrl={apiBaseUrl} 
-              benchmarkResult={lastBenchmarkResult}
             />
           )}
         </div>

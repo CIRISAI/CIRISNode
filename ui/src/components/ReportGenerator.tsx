@@ -17,6 +17,10 @@ interface GitHubConfig {
   branch: string;
 }
 
+interface ReportGeneratorProps {
+  apiBaseUrl?: string;
+}
+
 // GitHub Config Modal Component
 function GitHubConfigModal({
   isOpen,
@@ -118,7 +122,7 @@ function GitHubConfigModal({
   );
 }
 
-export default function ReportGenerator() {
+export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGeneratorProps) {
   const [results, setResults] = useState<ReportResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -135,7 +139,7 @@ export default function ReportGenerator() {
   });
   const [publishStatus, setPublishStatus] = useState<string | null>(null);
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const API_BASE = propApiBaseUrl || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const STORAGE_KEY = "he300_github_config";
 
   // Load GitHub config from localStorage on mount
