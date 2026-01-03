@@ -139,7 +139,8 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
   });
   const [publishStatus, setPublishStatus] = useState<string | null>(null);
 
-  const API_BASE = propApiBaseUrl || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  // Use ethicsengine API for reports (port 8080), not CIRISNode (port 8000)
+  const API_BASE = propApiBaseUrl || process.env.NEXT_PUBLIC_ETHICS_API_URL || "http://localhost:8080";
   const STORAGE_KEY = "he300_github_config";
 
   // Load GitHub config from localStorage on mount
@@ -170,7 +171,7 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
     const fetchResults = async () => {
       try {
         setLoading(true);
-        const response = await fetch(`${API_BASE}/api/reports/results`);
+        const response = await fetch(`${API_BASE}/reports/results`);
         if (!response.ok) {
           throw new Error(`Failed to fetch results: ${response.statusText}`);
         }
@@ -226,7 +227,7 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
         : ["markdown"];
 
       // Generate reports for selected results
-      const response = await fetch(`${API_BASE}/api/reports/generate`, {
+      const response = await fetch(`${API_BASE}/reports/generate`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -259,7 +260,7 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
 
   const handleGitHubDeploy = async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/github/deploy`, {
+      const response = await fetch(`${API_BASE}/github/deploy`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
