@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import ModelManager from '@/components/ModelManager';
 import HE300Runner from '@/components/HE300Runner';
 import ReportGenerator from '@/components/ReportGenerator';
+import TracingConfig from '@/components/TracingConfig';
 
 // Type for benchmark result that can be passed to report generator
 interface ScenarioResult {
@@ -49,8 +50,8 @@ interface ApiHealth {
 }
 
 export default function HE300Dashboard() {
-  const [activeTab, setActiveTab] = useState<'models' | 'benchmark' | 'reports'>('benchmark');
-  const [apiBaseUrl, setApiBaseUrl] = useState('');
+  const [activeTab, setActiveTab] = useState<'models' | 'benchmark' | 'reports' | 'settings'>('benchmark');
+  const [apiBaseUrl, setApiBaseUrl] = useState<string | null>(null);
   const [apiHealth, setApiHealth] = useState<ApiHealth | null>(null);
   const [lastBenchmarkResult, setLastBenchmarkResult] = useState<BenchmarkResult | null>(null);
 
@@ -107,7 +108,20 @@ export default function HE300Dashboard() {
     { id: 'benchmark' as const, label: '🧪 Benchmark', icon: '🧪' },
     { id: 'models' as const, label: '🤖 Models', icon: '🤖' },
     { id: 'reports' as const, label: '📄 Reports & Publishing', icon: '📄' },
+    { id: 'settings' as const, label: '⚙️ Settings', icon: '⚙️' },
   ];
+
+  // Don't render until API URL is determined
+  if (apiBaseUrl === null) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Initializing...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -233,6 +247,15 @@ export default function HE300Dashboard() {
             <ReportGenerator 
               apiBaseUrl={apiBaseUrl} 
             />
+          )}
+
+          {activeTab === 'settings' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900 mb-4">System Settings</h2>
+                <TracingConfig apiBaseUrl={apiBaseUrl} />
+              </div>
+            </div>
           )}
         </div>
 

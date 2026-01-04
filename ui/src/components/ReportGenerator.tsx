@@ -205,6 +205,92 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
     }
   };
 
+  // Fetch full benchmark result data by ID
+  const fetchBenchmarkResult = async (batchId: string) => {
+    // Try to fetch from benchmark_results endpoint
+    const response = await fetch(`${API_BASE}/he300/result/${batchId}`);
+    if (response.ok) {
+      return await response.json();
+    }
+    
+    // Fallback: try to find it in the results list and use minimal data
+    const result = results.find(r => r.id === batchId);
+    if (result) {
+      return {
+        batch_id: batchId,
+        model_name: result.model_name,
+        status: result.status,
+        summary: {
+          total: 0,
+          correct: 0,
+          accuracy: result.scores?.overall || 0,
+          avg_latency_ms: 0,
+          by_category: result.scores || {},
+          errors: 0
+        },
+        results: []
+      };
+    }
+    
+    throw new Error(`Could not fetch benchmark result for ${batchId}`);
+  };
+
+  // Convert benchmark result to report request format
+  const buildReportRequest = (benchmarkResult: Record<string, unknown>, format: string) => {
+    const summary = benchmarkResult.summary as Record<string, unknown> || {};
+    const byCategory = summary.by_category as Record<string, Record<string, number>> || {};
+    
+    // Build category results array
+    const categories = Object.entries(byCategory).map(([name, data]) => ({
+      category: name,
+      total: data?.total || 0,
+      correct: data?.correct || 0,
+      accuracy: data?.accuracy || 0,
+      avg_latency_ms: data?.avg_latency_ms || 0,
+      errors: data?.errors || 0
+    }));
+
+    // Build scenarios array from results
+    const resultsArray = (benchmarkResult.results || []) as Array<Record<string, unknown>>;
+    const scenarios = resultsArray.map((r) => ({
+      scenario_id: r.scenario_id as string || '',
+      category: r.category as string || '',
+      input_text: r.input_text as string || '',
+      expected_label: r.expected_label as number | null,
+      predicted_label: r.predicted_label as number | null,
+      model_response: r.model_response as string || '',
+      is_correct: r.is_correct as boolean || false,
+      latency_ms: r.latency_ms as number || 0,
+      error: r.error as string | null
+    }));
+
+    const now = new Date().toISOString();
+    
+    return {
+      batch_id: benchmarkResult.batch_id as string,
+      summary: {
+        batch_id: benchmarkResult.batch_id as string,
+        model_name: benchmarkResult.model_name as string || 'Unknown',
+        identity_id: benchmarkResult.identity_id as string || 'default',
+        guidance_id: benchmarkResult.guidance_id as string || 'default',
+        total_scenarios: (summary.total as number) || scenarios.length,
+        correct_predictions: (summary.correct as number) || 0,
+        overall_accuracy: (summary.accuracy as number) || 0,
+        avg_latency_ms: (summary.avg_latency_ms as number) || 0,
+        total_errors: (summary.errors as number) || 0,
+        categories: categories,
+        started_at: benchmarkResult.started_at as string || now,
+        completed_at: benchmarkResult.completed_at as string || now,
+        processing_time_ms: benchmarkResult.processing_time_ms as number || 0
+      },
+      scenarios: scenarios,
+      format: format,
+      include_scenarios: true,
+      sign_report: true,
+      jekyll_frontmatter: true
+    };
+  };
+
   const handleGenerateReports = async () => {
     if (selectedResults.size === 0) {
       setError("Please select at least one result to generate reports");
@@ -226,27 +312,49 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
         ? ["markdown", "html", "json"]
         : ["markdown"];
 
-      // Generate reports for selected results
-      const response = await fetch(`${API_BASE}/reports/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          result_ids: Array.from(selectedResults),
-          formats: formats,
-        }),
-      });
+      let totalGenerated = 0;
+      const errors: string[] = [];
 
-      if (!response.ok) {
-        throw new Error(`Failed to generate reports: ${response.statusText}`);
+      // Generate reports for each selected result
+      for (const batchId of Array.from(selectedResults)) {
+        try {
+          // Fetch the full benchmark result data
+          const benchmarkResult = await fetchBenchmarkResult(batchId);
+          
+          // Generate report for each format
+          for (const format of formats) {
+            const reportRequest = buildReportRequest(benchmarkResult, format);
+            
+            const response = await fetch(`${API_BASE}/reports/generate`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(reportRequest),
+            });
+
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({}));
+              throw new Error(errorData.detail || `Failed to generate ${format} report`);
+            }
+
+            totalGenerated++;
+          }
+        } catch (err) {
+          errors.push(`${batchId}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
       }
 
-      const data = await response.json();
-      setPublishStatus(`Generated ${data.reports?.length || 0} reports`);
+      if (errors.length > 0) {
+        setError(`Some reports failed: ${errors.join('; ')}`);
+      }
+      
+      if (totalGenerated > 0) {
+        setPublishStatus(`Generated ${totalGenerated} reports`);
+      }
 
       // If publishing to GitHub is enabled, deploy the reports
-      if (publishToGitHub) {
+      if (publishToGitHub && totalGenerated > 0) {
         setPublishing(true);
         await handleGitHubDeploy();
       }
@@ -266,10 +374,7 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          token: gitHubConfig.token,
-          repo: gitHubConfig.repo,
-          branch: gitHubConfig.branch,
-          result_ids: Array.from(selectedResults),
+          report_ids: Array.from(selectedResults),
         }),
       });
 
