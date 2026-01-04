@@ -20,6 +20,8 @@ interface ScenarioResult {
   is_correct: boolean;
   latency_ms: number;
   error: string | null;
+  trace_id?: string | null;
+  trace_url?: string | null;
 }
 
 interface BatchResult {
@@ -606,6 +608,17 @@ const HE300Runner: React.FC<HE300RunnerProps> = ({ apiBaseUrl = '', onBenchmarkC
                           <span className={`text-lg ${r.is_correct ? '✅' : '❌'}`} />
                           <code className="text-xs bg-gray-100 px-1 rounded">{r.scenario_id}</code>
                           <span className="text-xs text-gray-500">{r.category}</span>
+                          {r.trace_url && (
+                            <a
+                              href={r.trace_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-blue-600 hover:text-blue-800"
+                              title={`View LangSmith trace: ${r.trace_id || 'trace'}`}
+                            >
+                              🔗
+                            </a>
+                          )}
                         </div>
                         <p className="mt-1 text-gray-600 text-xs line-clamp-2">{r.input_text}</p>
                         {r.model_response && (

@@ -16,6 +16,8 @@ interface ScenarioResult {
   is_correct: boolean;
   latency_ms: number;
   error: string | null;
+  trace_id?: string | null;
+  trace_url?: string | null;
 }
 
 interface CategoryResult {
