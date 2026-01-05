@@ -15,8 +15,17 @@ class Settings(BaseSettings):
     max_concurrent_requests: int = 100
     JWT_SECRET: str = "your-jwt-secret"  # Replace with a secure secret
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    VERSION: str = "0.1.0"  # Add version
+    VERSION: str = "0.2.0"  # Bumped version for EEE integration
     PUBLIC_KEY: str = ""  # Add public key
+    
+    # --- EthicsEngine Enterprise Integration Settings ---
+    EEE_ENABLED: bool = False  # Feature flag - disabled by default for fork safety
+    EEE_BASE_URL: str = "http://localhost:8080"  # EthicsEngine Enterprise API URL
+    EEE_TIMEOUT_SECONDS: int = 300  # Timeout for EEE API calls (5 minutes for batch)
+    EEE_BATCH_SIZE: int = 50  # Max scenarios per batch request to EEE
+    EEE_RETRY_COUNT: int = 3  # Number of retries for failed EEE calls
+    EEE_RETRY_DELAY: float = 1.0  # Base delay between retries (seconds)
+    HE300_CACHE_TTL: int = 3600  # Cache scenario data for 1 hour (seconds)
 
     class Config:
         env_file = ".env"

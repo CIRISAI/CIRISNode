@@ -74,6 +74,7 @@ export default function Home() {
             {/* --- TOP NAVIGATION TABS --- */}
             <nav className="flex flex-wrap justify-center gap-2 mb-4 border-b border-gray-200 pb-2">
               <Link href="/" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Home</Link>
+              <Link href="/he300" className="px-4 py-2 rounded-t bg-indigo-600 hover:bg-indigo-700 text-white font-semibold">⚖️ HE-300 Benchmark</Link>
               <Link href="#audit" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Audit Logs</Link>
               <Link href="#admin" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Admin</Link>
               <Link href="#wise" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Wise Authority</Link>
