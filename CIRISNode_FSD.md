@@ -1,6 +1,6 @@
 # **CIRISNode – Functional Specification (REST-Only, Minimal Edition)**
 
-*Version 1.3 · 2025-05-21*
+*Version 1.4 · 2026-01-28*
 
 ---
 
@@ -16,7 +16,7 @@ It delivers:
 3. **Immutable audit logging** – every benchmark, WBD decision, and agent event.
    - *Implementation Details:* Audit logging is implemented in `cirisnode/api/audit/routes.py` and integrated with benchmark, WBD, and agent event endpoints.
 
-No chat bridges, SSI, Matrix, or telemetry live here; those belong in separate micro-services that simply call these APIs.
+No chat bridges, SSI, Matrix, or telemetry live here; those belong in separate micro-services. A2A and MCP protocols are supported for agent-to-agent communication and tool access.
 
 ---
 
@@ -34,6 +34,10 @@ No chat bridges, SSI, Matrix, or telemetry live here; those belong in separate m
 |     |                  | *Implementation Details:* Endpoints in `cirisnode/api/audit/routes.py`; logs are downloadable.                     |
 | 2.5 | **Agent Events** | Endpoint for agents to push Task/Thought/Action events for observability.                                         |
 |     |                  | *Implementation Details:* Endpoint in `cirisnode/api/agent/routes.py`.                                             |
+| 2.6 | **A2A Protocol** | Agent-to-Agent protocol for AgentBeats competition compatibility. JSON-RPC 2.0 endpoint for task management.       |
+|     |                  | *Implementation Details:* Endpoints in `cirisnode/api/a2a/`. Agent Card at `/.well-known/agent.json`.              |
+| 2.7 | **MCP Server**   | Model Context Protocol server exposing HE-300 evaluation as tools and resources for AI agent integration.          |
+|     |                  | *Implementation Details:* FastMCP server in `cirisnode/mcp/`. Tools: scenario listing, batch evaluation, reports.  |
 
 ---
 
@@ -57,8 +61,13 @@ No chat bridges, SSI, Matrix, or telemetry live here; those belong in separate m
 | **POST** | `/chaos`                                   | Execute chaos scenarios for an agent.                     |               |
 | **POST** | `/events`                                  | Agents push event logs.                                   |               |
 | **GET**  | `/metrics`                                 | Prometheus metrics (public).                              |               |
+| **GET**  | `/.well-known/agent.json`                  | A2A Agent Card discovery (public).                        |               |
+| **POST** | `/a2a`                                     | A2A JSON-RPC 2.0 (message/send, tasks/get, etc.).         |               |
+| **GET**  | `/a2a/tasks/{id}/stream`                   | SSE streaming for A2A task progress.                      |               |
+| **GET**  | `/mcp/sse`                                 | MCP SSE transport endpoint.                               |               |
+| **POST** | `/mcp/messages/`                           | MCP message endpoint for tool calls.                      |               |
 
-*No other transports in this node.*
+*A2A and MCP transports added for AgentBeats compatibility.*
 *Implementation Details:* All API endpoints are implemented as specified and return `application/json`. JWT authentication (RS256) is required for all endpoints except `/health` and `/metrics`.
 
 ---
@@ -84,6 +93,8 @@ Large result JSON stored in object storage (disk → S3/GCS).
 * **Postgres / SQLite** – metadata + audit.
 * **Next.js UI** (optional) – dashboard under `/ui` but calls the same REST.
 * **Ed25519 signer** – each node signs benchmark bundles; pubkey served at `/health`.
+* **A2A Server** – JSON-RPC 2.0 endpoint with SSE streaming for task progress.
+* **MCP Server** – FastMCP-based Model Context Protocol server for AI agent tool access.
 
 Docker Compose: `api`, `worker`, `redis`, `db`, `ui` (optional).
 *Implementation Details:* All components are implemented as specified. FastAPI (`cirisnode/main.py`), Celery + Redis (`cirisnode/celery_app.py`), Postgres/SQLite (`cirisnode/database.py`), Next.js UI (`ui/`), Ed25519 signer (`cirisnode/utils/signer.py`), and Docker Compose (`docker-compose.yml`) are all in place.
@@ -146,4 +157,4 @@ Helm chart `cirisnode-0.2.0` for Kubernetes.
 
 ---
 
-**CIRISNode v1.3** – the simplest REST-only nucleus for alignment benchmarking, WBD governance, and audit.
+**CIRISNode v1.4** – REST nucleus for alignment benchmarking, WBD governance, audit, and AgentBeats-compatible A2A/MCP integration.

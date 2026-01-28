@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     EEE_RETRY_DELAY: float = 1.0  # Base delay between retries (seconds)
     HE300_CACHE_TTL: int = 3600  # Cache scenario data for 1 hour (seconds)
 
+    # --- A2A Protocol Settings ---
+    A2A_ENABLED: bool = True  # Enable A2A protocol endpoints
+    MCP_ENABLED: bool = True  # Enable MCP server endpoints
+    A2A_MAX_CONCURRENT_BATCHES: int = 6  # Max parallel batch evaluations
+    A2A_TASK_TTL_SECONDS: int = 3600  # Task expiry after completion (seconds)
+
     class Config:
         env_file = ".env"
         extra = Extra.allow  # Allow extra env vars (e.g., frontend-only vars in .env)

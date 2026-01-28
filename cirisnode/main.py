@@ -10,6 +10,8 @@ from cirisnode.api.agent.routes import agent_router
 from cirisnode.api.auth.routes import auth_router
 from cirisnode.api.wa.routes import wa_router
 from cirisnode.api.config.routes import config_router
+from cirisnode.api.a2a.routes import a2a_router, agent_card_router
+from cirisnode.mcp.transport import mcp_app
 import os
 
 app = FastAPI()
@@ -35,6 +37,13 @@ app.include_router(auth_router)
 app.include_router(benchmarks_router)
 app.include_router(wa_router)
 app.include_router(config_router)
+
+# A2A Protocol endpoints
+app.include_router(agent_card_router)  # /.well-known/agent.json
+app.include_router(a2a_router)          # /a2a
+
+# MCP Server (mounted as sub-application)
+app.mount("/mcp", mcp_app)              # /mcp/sse, /mcp/messages/
 
 @app.get("/metrics")
 def metrics():

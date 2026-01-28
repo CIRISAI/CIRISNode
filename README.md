@@ -66,6 +66,28 @@ All endpoints use the `/api/v1` prefix unless noted otherwise. Most require a JW
 - **POST** `/auth/token` – Obtain a JWT token.
 - **POST** `/auth/refresh` – Refresh an existing token.
 
+**A2A Protocol (AgentBeats Compatible):**
+
+- **GET** `/.well-known/agent.json` – Agent Card discovery (no auth required).
+- **POST** `/a2a` – JSON-RPC 2.0 endpoint for task management:
+  - `message/send` – Start evaluation task or get scenarios.
+  - `tasks/get` – Get task status and results.
+  - `tasks/list` – List tasks with filtering.
+  - `tasks/cancel` – Cancel a running task.
+- **GET** `/a2a/tasks/{task_id}/stream` – SSE streaming for real-time task progress.
+
+**MCP Server (Model Context Protocol):**
+
+- **GET** `/mcp/sse` – SSE transport for MCP clients.
+- **POST** `/mcp/messages/` – MCP message endpoint.
+- **Tools available:**
+  - `list_he300_scenarios` – List available ethical scenarios.
+  - `run_he300_scenario` – Evaluate a single scenario.
+  - `run_he300_batch` – Parallel batch evaluation.
+  - `get_evaluation_report` – Get signed evaluation report.
+  - `get_he300_categories` – Get category information.
+- **Resources:** `he300://scenarios`, `he300://categories`, `he300://health`
+
 *All responses are JSON and may include signatures in future releases.*
 
 ---
@@ -80,7 +102,7 @@ All endpoints use the `/api/v1` prefix unless noted otherwise. Most require a JW
 
 ## 7  License
 
-This README is licensed under Apache 2.0 © 2025 CIRIS AI Project
+This project is licensed under GNU AGPL v3.0 © 2025-2026 CIRIS AI Project
 
 ---
 
@@ -119,6 +141,37 @@ This README is licensed under Apache 2.0 © 2025 CIRIS AI Project
 - Benchmark runs triggered via `/api/v1/benchmarks/run`
 - Results are saved and accessible via `/status/{id}` and `/results/{id}`
 - Placeholder inference logic is located in `utils/inference.py`
+
+---
+
+#### A2A Protocol & MCP Support
+
+CIRISNode implements the A2A (Agent-to-Agent) Protocol and MCP (Model Context Protocol) for AgentBeats compatibility:
+
+- **Agent Card** at `/.well-known/agent.json` for capability discovery
+- **JSON-RPC 2.0** endpoint at `/a2a` for task management
+- **SSE streaming** for real-time progress updates during evaluation
+- **Parallel batch execution** (6 concurrent batches of 50 scenarios)
+- **MCP tools** for scenario listing, single/batch evaluation, and report retrieval
+- **Dual authentication** supporting both JWT Bearer tokens and API keys
+
+##### Running the Baseline Purple Agent
+
+Test A2A connectivity with the included baseline purple agent:
+
+```bash
+# List available scenarios
+python -m tests.purple_agent.run --url http://localhost:8000 --api-key YOUR_KEY --list-scenarios
+
+# Run full HE-300 benchmark (300 scenarios)
+python -m tests.purple_agent.run --url http://localhost:8000 --api-key YOUR_KEY --scenarios 300
+
+# Run specific category only
+python -m tests.purple_agent.run --url http://localhost:8000 --api-key YOUR_KEY --category commonsense
+
+# Save results to file
+python -m tests.purple_agent.run --url http://localhost:8000 --api-key YOUR_KEY --output results.json
+```
 
 ---
 
@@ -377,8 +430,11 @@ By maintaining a comprehensive and up-to-date test suite, we can confidently del
 
 ### 🧵 Final Word
 
-CIRISNode is now fully operational in dev/test environments with full API and testing infrastructure, supporting future integration into the CIRISAgent client ecosystem. The addition of the EEE frontend interface as a Streamlit web application marks a significant advancement in Phase 3, providing a user-friendly, modular UI for Wise Authorities to interact with the system, submit deferral requests, and manage ethical benchmarks in real-time with the backend. This sets the stage for full integration and further enhancements in upcoming phases.
+CIRISNode is now fully operational in dev/test environments with full API and testing infrastructure, supporting future integration into the CIRISAgent client ecosystem.
+
+**January 2026 Update:** CIRISNode now supports the A2A (Agent-to-Agent) Protocol and MCP (Model Context Protocol) for AgentBeats competition compatibility. Purple agents can connect via A2A to take the HE-300 ethical benchmark, with support for parallel batch execution (6 concurrent batches), SSE streaming for real-time progress, and signed evaluation reports. The MCP server exposes HE-300 evaluation as tools and resources for AI agent integration.
 
 All tests are now passing, confirming that the API endpoints are working as expected according to the test specifications. The system has been thoroughly tested and validated, ensuring reliability, security, and compliance with the project requirements.
 
 – Bradley Matera, May 2025
+– A2A/MCP Update, January 2026
