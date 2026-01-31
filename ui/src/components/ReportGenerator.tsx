@@ -11,6 +11,17 @@ interface ReportResult {
   status: string;
 }
 
+interface GeneratedReport {
+  report_id: string;
+  batch_id: string;
+  model_name: string;
+  accuracy: number;
+  format: string;
+  created_at: string;
+  file_path: string;
+  file_size: number;
+}
+
 interface GitHubConfig {
   token: string;
   repo: string;
@@ -132,6 +143,7 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
   const [publishToGitHub, setPublishToGitHub] = useState(false);
   const [generateAllFormats, setGenerateAllFormats] = useState(true);
   const [showGitHubModal, setShowGitHubModal] = useState(false);
+  const [generatedReports, setGeneratedReports] = useState<GeneratedReport[]>([]);
   const [gitHubConfig, setGitHubConfig] = useState<GitHubConfig>({
     token: "",
     repo: "",
@@ -166,7 +178,20 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
     }
   }, []);
 
-  // Fetch available results
+  // Fetch generated reports
+  const fetchGeneratedReports = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/reports/`);
+      if (response.ok) {
+        const data = await response.json();
+        setGeneratedReports(data.reports || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch generated reports:", err);
+    }
+  }, [API_BASE]);
+
+  // Fetch available results and generated reports
   useEffect(() => {
     const fetchResults = async () => {
       try {
@@ -185,7 +210,8 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
     };
 
     fetchResults();
-  }, [API_BASE]);
+    fetchGeneratedReports();
+  }, [API_BASE, fetchGeneratedReports]);
 
   const toggleResultSelection = (id: string) => {
     const newSelected = new Set(selectedResults);
@@ -258,19 +284,43 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
       input_text: r.input_text as string || '',
       expected_label: r.expected_label as number | null,
       predicted_label: r.predicted_label as number | null,
-      model_response: r.model_response as string || '',
+      model_response: r.model_response || r.agent_response as string || '',
       is_correct: r.is_correct as boolean || false,
       latency_ms: r.latency_ms as number || 0,
-      error: r.error as string | null
+      error: r.error as string | null,
+      trace_id: r.trace_id as string | null,
+      trace_url: r.trace_url as string | null,
+      // Include heuristic and semantic evaluation results
+      heuristic_eval: r.heuristic_eval as { classification: string; label: number | null; confidence: number; method: string } | null,
+      semantic_eval: r.semantic_eval as { classification: string; label: number | null; confidence: number; method: string } | null,
+      evaluations_agree: r.evaluations_agree as boolean ?? true,
+      disagreement_note: r.disagreement_note as string | null
     }));
 
     const now = new Date().toISOString();
-    
+
+    // Determine agent type based on batch_id prefix or other indicators
+    let agentType = benchmarkResult.agent_type as string || '';
+    if (!agentType) {
+      const batchId = benchmarkResult.batch_id as string || '';
+      if (batchId.startsWith('agentbeats-')) {
+        agentType = 'eee_purple';
+      } else if (batchId.startsWith('ciris-')) {
+        agentType = 'ciris_agent';
+      } else if (batchId.startsWith('demo-')) {
+        agentType = 'base_llm';
+      }
+    }
+
     return {
       batch_id: benchmarkResult.batch_id as string,
       summary: {
         batch_id: benchmarkResult.batch_id as string,
         model_name: benchmarkResult.model_name as string || 'Unknown',
+        agent_name: benchmarkResult.agent_name as string || '',
+        agent_type: agentType,
+        protocol: benchmarkResult.protocol as string || '',
+        agent_url: benchmarkResult.agent_url as string || '',
         identity_id: benchmarkResult.identity_id as string || 'default',
         guidance_id: benchmarkResult.guidance_id as string || 'default',
         total_scenarios: (summary.total as number) || scenarios.length,
@@ -363,6 +413,8 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
     } finally {
       setGenerating(false);
       setPublishing(false);
+      // Refresh the list of generated reports
+      fetchGeneratedReports();
     }
   };
 
@@ -644,6 +696,50 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
           >
             https://{gitHubConfig.repo.split("/")[0]}.github.io/{gitHubConfig.repo.split("/")[1]}/
           </a>
+        </div>
+      )}
+
+      {/* Generated Reports Section */}
+      {generatedReports.length > 0 && (
+        <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+          <div className="px-4 py-3 bg-gray-750 border-b border-gray-700">
+            <h3 className="text-lg font-medium text-white">Generated Reports ({generatedReports.length})</h3>
+          </div>
+          <div className="divide-y divide-gray-700">
+            {generatedReports.map((report) => (
+              <div key={report.report_id} className="px-4 py-3 flex items-center justify-between hover:bg-gray-750">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      report.format === 'html' ? 'bg-orange-900/50 text-orange-300' :
+                      report.format === 'markdown' ? 'bg-blue-900/50 text-blue-300' :
+                      'bg-green-900/50 text-green-300'
+                    }`}>
+                      {report.format.toUpperCase()}
+                    </span>
+                    <span className="text-white font-medium">{report.model_name || 'Unknown Model'}</span>
+                    <span className="text-gray-400 text-sm">({(report.accuracy * 100).toFixed(1)}% accuracy)</span>
+                  </div>
+                  <div className="text-gray-500 text-sm mt-1">
+                    {report.batch_id} • {new Date(report.created_at).toLocaleString()} • {(report.file_size / 1024).toFixed(1)} KB
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`${API_BASE}/reports/download/${report.report_id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-md transition-colors flex items-center gap-1"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Download
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
