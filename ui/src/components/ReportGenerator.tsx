@@ -321,6 +321,12 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
         agent_type: agentType,
         protocol: benchmarkResult.protocol as string || '',
         agent_url: benchmarkResult.agent_url as string || '',
+        // Agent card info (from .well-known/agent.json)
+        agent_card_name: benchmarkResult.agent_card_name as string || '',
+        agent_card_version: benchmarkResult.agent_card_version as string || '',
+        agent_card_provider: benchmarkResult.agent_card_provider as string || '',
+        agent_card_did: benchmarkResult.agent_card_did as string || null,
+        agent_card_skills: benchmarkResult.agent_card_skills as string[] || [],
         identity_id: benchmarkResult.identity_id as string || 'default',
         guidance_id: benchmarkResult.guidance_id as string || 'default',
         total_scenarios: (summary.total as number) || scenarios.length,
