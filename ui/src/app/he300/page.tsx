@@ -8,6 +8,7 @@ import GreenAgentConfig from '@/components/GreenAgentConfig';
 import BaseLLMDemo from '@/components/BaseLLMDemo';
 import EEEPurpleDemo from '@/components/EEEPurpleDemo';
 import CIRISAgentDemo from '@/components/CIRISAgentDemo';
+import CIRISBenchStatus from '@/components/CIRISBenchStatus';
 
 // Type for benchmark result from AgentBenchmarkRunner
 interface CategoryBreakdown {
@@ -48,7 +49,7 @@ interface ApiHealth {
 }
 
 export default function HE300Dashboard() {
-  const [activeTab, setActiveTab] = useState<'base-llm' | 'eee-purple' | 'ciris-agent' | 'models' | 'benchmark' | 'reports' | 'settings'>('base-llm');
+  const [activeTab, setActiveTab] = useState<'base-llm' | 'eee-purple' | 'ciris-agent' | 'models' | 'benchmark' | 'reports' | 'settings' | 'status'>('base-llm');
   const [apiBaseUrl, setApiBaseUrl] = useState<string | null>(null);
   const [apiHealth, setApiHealth] = useState<ApiHealth | null>(null);
   const [lastBenchmarkResult, setLastBenchmarkResult] = useState<BenchmarkResult | null>(null);
@@ -109,6 +110,7 @@ export default function HE300Dashboard() {
     { id: 'benchmark' as const, label: '🧪 Benchmark', icon: '🧪' },
     { id: 'models' as const, label: '🤖 Models', icon: '🤖' },
     { id: 'reports' as const, label: '📄 Reports', icon: '📄' },
+    { id: 'status' as const, label: '📡 Status', icon: '📡' },
     { id: 'settings' as const, label: '⚙️ Settings', icon: '⚙️' },
   ];
 
@@ -257,9 +259,13 @@ export default function HE300Dashboard() {
           )}
 
           {activeTab === 'reports' && (
-            <ReportGenerator 
-              apiBaseUrl={apiBaseUrl} 
+            <ReportGenerator
+              apiBaseUrl={apiBaseUrl}
             />
+          )}
+
+          {activeTab === 'status' && (
+            <CIRISBenchStatus apiBaseUrl={apiBaseUrl} />
           )}
 
           {activeTab === 'settings' && (
