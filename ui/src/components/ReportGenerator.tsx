@@ -22,6 +22,40 @@ interface GeneratedReport {
   file_size: number;
 }
 
+interface ResultPreview {
+  batch_id: string;
+  model_name: string;
+  agent_name?: string;
+  agent_type?: string;
+  protocol?: string;
+  agent_url?: string;
+  agent_card_name?: string;
+  agent_card_version?: string;
+  agent_card_provider?: string;
+  agent_card_did?: string;
+  summary: {
+    total: number;
+    correct: number;
+    accuracy: number;
+    avg_latency_ms: number;
+    errors: number;
+    by_category?: Record<string, { total: number; correct: number; accuracy: number }>;
+  };
+  results?: Array<{
+    scenario_id: string;
+    category: string;
+    input_text: string;
+    expected_label: number | null;
+    predicted_label: number | null;
+    is_correct: boolean;
+    model_response?: string;
+    agent_response?: string;
+    heuristic_eval?: { classification: string; confidence: number };
+    semantic_eval?: { classification: string; confidence: number };
+    evaluations_agree?: boolean;
+  }>;
+}
+
 interface GitHubConfig {
   token: string;
   repo: string;
@@ -151,6 +185,11 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
   });
   const [publishStatus, setPublishStatus] = useState<string | null>(null);
 
+  // Preview state
+  const [previewResult, setPreviewResult] = useState<ResultPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+
   // Use ethicsengine API for reports (port 8080), not CIRISNode (port 8000)
   const API_BASE = propApiBaseUrl || process.env.NEXT_PUBLIC_ETHICS_API_URL || "http://localhost:8080";
   const STORAGE_KEY = "he300_github_config";
@@ -190,6 +229,57 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
       console.error("Failed to fetch generated reports:", err);
     }
   }, [API_BASE]);
+
+  // Fetch preview data for a result
+  const fetchPreview = useCallback(async (batchId: string) => {
+    if (previewId === batchId) {
+      // Toggle off if clicking the same result
+      setPreviewId(null);
+      setPreviewResult(null);
+      return;
+    }
+
+    setPreviewLoading(true);
+    setPreviewId(batchId);
+
+    try {
+      const response = await fetch(`${API_BASE}/he300/result/${batchId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setPreviewResult(data);
+      } else {
+        // Fallback to basic info from the results list
+        const result = results.find(r => r.id === batchId);
+        if (result) {
+          // Convert scores to proper category format
+          const byCategory: Record<string, { total: number; correct: number; accuracy: number }> = {};
+          if (result.scores) {
+            Object.entries(result.scores).forEach(([key, value]) => {
+              if (key !== 'overall' && typeof value === 'number') {
+                byCategory[key] = { total: 0, correct: 0, accuracy: value };
+              }
+            });
+          }
+          setPreviewResult({
+            batch_id: batchId,
+            model_name: result.model_name,
+            summary: {
+              total: 0,
+              correct: 0,
+              accuracy: result.scores?.overall || 0,
+              avg_latency_ms: 0,
+              errors: 0,
+              by_category: byCategory
+            }
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch preview:", err);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [API_BASE, previewId, results]);
 
   // Fetch available results and generated reports
   useEffect(() => {
@@ -636,8 +726,8 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
                   key={result.id}
                   className={`hover:bg-gray-750 cursor-pointer ${
                     selectedResults.has(result.id) ? "bg-blue-900/20" : ""
-                  }`}
-                  onClick={() => toggleResultSelection(result.id)}
+                  } ${previewId === result.id ? "ring-2 ring-indigo-500 ring-inset" : ""}`}
+                  onClick={() => fetchPreview(result.id)}
                 >
                   <td className="px-4 py-3">
                     <input
@@ -689,6 +779,190 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
           </table>
         )}
       </div>
+
+      {/* Result Preview Panel */}
+      {(previewLoading || previewResult) && (
+        <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+          <div className="px-4 py-3 bg-gray-750 border-b border-gray-700 flex justify-between items-center">
+            <h3 className="text-lg font-medium text-white flex items-center gap-2">
+              <span>📊</span> Result Preview
+              {previewResult && (
+                <span className="text-sm font-normal text-gray-400">
+                  — {previewResult.batch_id}
+                </span>
+              )}
+            </h3>
+            <button
+              onClick={() => { setPreviewId(null); setPreviewResult(null); }}
+              className="text-gray-400 hover:text-white"
+            >
+              ×
+            </button>
+          </div>
+
+          {previewLoading ? (
+            <div className="p-8 text-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
+              <p className="mt-2 text-gray-400">Loading preview...</p>
+            </div>
+          ) : previewResult && (
+            <div className="p-4 space-y-4">
+              {/* Summary Stats */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div className="bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-blue-400">
+                    {((previewResult.summary?.accuracy || 0) * 100).toFixed(1)}%
+                  </p>
+                  <p className="text-xs text-gray-400">Accuracy</p>
+                </div>
+                <div className="bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-white">
+                    {previewResult.summary?.total || 0}
+                  </p>
+                  <p className="text-xs text-gray-400">Total</p>
+                </div>
+                <div className="bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-green-400">
+                    {previewResult.summary?.correct || 0}
+                  </p>
+                  <p className="text-xs text-gray-400">Correct</p>
+                </div>
+                <div className="bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-gray-300">
+                    {(previewResult.summary?.avg_latency_ms || 0).toFixed(0)}ms
+                  </p>
+                  <p className="text-xs text-gray-400">Avg Latency</p>
+                </div>
+                <div className="bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-red-400">
+                    {previewResult.summary?.errors || 0}
+                  </p>
+                  <p className="text-xs text-gray-400">Errors</p>
+                </div>
+              </div>
+
+              {/* Agent Info */}
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="text-sm text-gray-400">Model:</span>
+                <span className="px-2 py-1 bg-gray-700 rounded text-sm text-white">
+                  {previewResult.model_name || 'Unknown'}
+                </span>
+                {previewResult.agent_name && (
+                  <>
+                    <span className="text-sm text-gray-400">Agent:</span>
+                    <span className="px-2 py-1 bg-purple-900/50 rounded text-sm text-purple-300">
+                      {previewResult.agent_name}
+                    </span>
+                  </>
+                )}
+                {previewResult.protocol && (
+                  <span className="px-2 py-1 bg-indigo-900/50 rounded text-xs text-indigo-300 uppercase">
+                    {previewResult.protocol}
+                  </span>
+                )}
+                {previewResult.agent_card_name && (
+                  <span className="px-2 py-1 bg-pink-900/50 rounded text-sm text-pink-300">
+                    🎫 {previewResult.agent_card_name}
+                    {previewResult.agent_card_version && ` v${previewResult.agent_card_version}`}
+                  </span>
+                )}
+              </div>
+
+              {/* Category Breakdown */}
+              {previewResult.summary?.by_category && Object.keys(previewResult.summary.by_category).length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-300 mb-2">Category Breakdown</h4>
+                  <div className="space-y-2">
+                    {Object.entries(previewResult.summary.by_category).map(([cat, data]) => (
+                      <div key={cat} className="flex items-center gap-3">
+                        <span className="text-sm text-gray-400 w-32 truncate" title={cat}>{cat}</span>
+                        <div className="flex-1 h-2 bg-gray-700 rounded-full">
+                          <div
+                            className={`h-2 rounded-full ${
+                              (data.accuracy || 0) >= 0.8 ? 'bg-green-500' :
+                              (data.accuracy || 0) >= 0.5 ? 'bg-yellow-500' :
+                              'bg-red-500'
+                            }`}
+                            style={{ width: `${(data.accuracy || 0) * 100}%` }}
+                          />
+                        </div>
+                        <span className="text-sm text-gray-300 w-24 text-right">
+                          {((data.accuracy || 0) * 100).toFixed(1)}% ({data.correct || 0}/{data.total || 0})
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Sample Scenarios */}
+              {previewResult.results && previewResult.results.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-300 mb-2">
+                    Sample Scenarios ({Math.min(5, previewResult.results.length)} of {previewResult.results.length})
+                  </h4>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {previewResult.results.slice(0, 5).map((scenario, idx) => (
+                      <div
+                        key={scenario.scenario_id || idx}
+                        className={`p-3 rounded-lg border ${
+                          scenario.is_correct
+                            ? 'bg-green-900/20 border-green-800'
+                            : 'bg-red-900/20 border-red-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`text-xs font-medium ${
+                            scenario.is_correct ? 'text-green-400' : 'text-red-400'
+                          }`}>
+                            {scenario.is_correct ? '✓ Correct' : '✗ Wrong'}
+                          </span>
+                          <span className="px-1.5 py-0.5 bg-gray-700 rounded text-xs text-gray-300">
+                            {scenario.category}
+                          </span>
+                          {scenario.heuristic_eval && scenario.semantic_eval && (
+                            <span className={`text-xs ${
+                              scenario.evaluations_agree ? 'text-gray-400' : 'text-yellow-400'
+                            }`}>
+                              {scenario.evaluations_agree ? 'Evals agree' : '⚠ Evals disagree'}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-300 line-clamp-2">
+                          {scenario.input_text}
+                        </p>
+                        {(scenario.model_response || scenario.agent_response) && (
+                          <p className="text-xs text-gray-500 mt-1 line-clamp-1">
+                            → {scenario.model_response || scenario.agent_response}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Quick Actions */}
+              <div className="flex gap-2 pt-2 border-t border-gray-700">
+                <button
+                  onClick={() => {
+                    if (!selectedResults.has(previewResult.batch_id)) {
+                      toggleResultSelection(previewResult.batch_id);
+                    }
+                  }}
+                  className={`px-3 py-1.5 rounded text-sm transition-colors ${
+                    selectedResults.has(previewResult.batch_id)
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                  }`}
+                >
+                  {selectedResults.has(previewResult.batch_id) ? '✓ Selected' : 'Select for Report'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* GitHub Pages Link */}
       {gitHubConfig.repo && (
