@@ -4,6 +4,7 @@ import ModelManager from '@/components/ModelManager';
 import AgentBenchmarkRunner from '@/components/AgentBenchmarkRunner';
 import ReportGenerator from '@/components/ReportGenerator';
 import TracingConfig from '@/components/TracingConfig';
+import GreenAgentConfig from '@/components/GreenAgentConfig';
 import BaseLLMDemo from '@/components/BaseLLMDemo';
 import EEEPurpleDemo from '@/components/EEEPurpleDemo';
 import CIRISAgentDemo from '@/components/CIRISAgentDemo';
@@ -263,10 +264,13 @@ export default function HE300Dashboard() {
 
           {activeTab === 'settings' && (
             <div className="space-y-6">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">System Settings</h2>
-                <TracingConfig apiBaseUrl={apiBaseUrl} />
-              </div>
+              <h2 className="text-xl font-semibold text-gray-900 mb-4">System Settings</h2>
+
+              {/* Green Agent Config */}
+              <GreenAgentConfig apiBaseUrl={apiBaseUrl} />
+
+              {/* Tracing Config */}
+              <TracingConfig apiBaseUrl={apiBaseUrl} />
             </div>
           )}
         </div>

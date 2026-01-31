@@ -1,5 +1,6 @@
 "use client";
 import React, { useState, useEffect, useCallback } from 'react';
+import { useGreenAgentSettings } from './GreenAgentConfig';
 
 interface CategoryBreakdown {
   [key: string]: {
@@ -66,10 +67,8 @@ const AgentBenchmarkRunner: React.FC<AgentBenchmarkRunnerProps> = ({
   const [protocol, setProtocol] = useState<'a2a' | 'mcp'>('a2a');
   const [semanticEval, setSemanticEval] = useState<boolean>(true);
 
-  // Green Agent (Evaluator) LLM Configuration
-  const [evaluatorProvider, setEvaluatorProvider] = useState<string>('');
-  const [evaluatorModel, setEvaluatorModel] = useState<string>('');
-  const [evaluatorApiKey, setEvaluatorApiKey] = useState<string>('');
+  // Green Agent (Evaluator) config from Settings
+  const { settings: greenAgentSettings } = useGreenAgentSettings();
 
   // API health
   const [apiHealth, setApiHealth] = useState<'unknown' | 'healthy' | 'unhealthy'>('unknown');
@@ -137,15 +136,15 @@ const AgentBenchmarkRunner: React.FC<AgentBenchmarkRunnerProps> = ({
         verify_ssl: true,
       };
 
-      // Add evaluator LLM config if specified (overrides server .env defaults)
-      if (evaluatorProvider) {
-        request.evaluator_provider = evaluatorProvider;
+      // Add evaluator LLM config from Settings (overrides server .env defaults)
+      if (greenAgentSettings.provider) {
+        request.evaluator_provider = greenAgentSettings.provider;
       }
-      if (evaluatorModel) {
-        request.evaluator_model = evaluatorModel;
+      if (greenAgentSettings.model) {
+        request.evaluator_model = greenAgentSettings.model;
       }
-      if (evaluatorApiKey) {
-        request.evaluator_api_key = evaluatorApiKey;
+      if (greenAgentSettings.apiKey) {
+        request.evaluator_api_key = greenAgentSettings.apiKey;
       }
 
       setProgress(`Running ${sampleSize} scenarios across ${HE300_CATEGORIES.length} categories (${Math.floor(sampleSize / HE300_CATEGORIES.length)} per category)...`);
@@ -343,69 +342,21 @@ const AgentBenchmarkRunner: React.FC<AgentBenchmarkRunnerProps> = ({
             </div>
           </div>
 
-          {/* Green Agent (Evaluator) LLM Configuration */}
+          {/* Green Agent Config Reference */}
           {semanticEval && (
-            <div className="border-b border-gray-200 pb-6">
-              <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
-                <span className="text-green-600">🟢</span> Green Agent (Evaluator) LLM
-                <span className="text-xs text-gray-400 font-normal">— defaults to server .env if empty</span>
-              </h4>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Provider
-                  </label>
-                  <select
-                    value={evaluatorProvider}
-                    onChange={(e) => setEvaluatorProvider(e.target.value)}
-                    className="w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500"
-                  >
-                    <option value="">Server Default</option>
-                    <option value="ollama">Ollama (Local)</option>
-                    <option value="together">Together AI</option>
-                    <option value="openrouter">OpenRouter</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                  </select>
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-green-600">🟢</span>
+                  <span className="text-sm text-green-800">
+                    Green Agent: {greenAgentSettings.provider || 'Server Default'}
+                    {greenAgentSettings.model && ` / ${greenAgentSettings.model}`}
+                  </span>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Model
-                  </label>
-                  <input
-                    type="text"
-                    value={evaluatorModel}
-                    onChange={(e) => setEvaluatorModel(e.target.value)}
-                    placeholder={
-                      evaluatorProvider === 'ollama' ? 'llama3.2' :
-                      evaluatorProvider === 'together' ? 'meta-llama/Llama-3.3-70B-Instruct-Turbo' :
-                      evaluatorProvider === 'openrouter' ? 'openai/gpt-4o-mini' :
-                      evaluatorProvider === 'openai' ? 'gpt-4o-mini' :
-                      evaluatorProvider === 'anthropic' ? 'claude-3-haiku-20240307' :
-                      'Server default'
-                    }
-                    className="w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    API Key
-                  </label>
-                  <input
-                    type="password"
-                    value={evaluatorApiKey}
-                    onChange={(e) => setEvaluatorApiKey(e.target.value)}
-                    placeholder="Server default (~/.provider_key)"
-                    className="w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500"
-                  />
-                </div>
+                <span className="text-xs text-green-600">
+                  Configure in Settings tab
+                </span>
               </div>
-              <p className="mt-2 text-xs text-gray-500">
-                The green agent evaluates purple agent responses using semantic LLM classification.
-                Leave empty to use server environment defaults.
-              </p>
             </div>
           )}
 
