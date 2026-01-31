@@ -4,6 +4,7 @@ import ModelManager from '@/components/ModelManager';
 import HE300Runner from '@/components/HE300Runner';
 import ReportGenerator from '@/components/ReportGenerator';
 import TracingConfig from '@/components/TracingConfig';
+import PurpleAgentDemo from '@/components/PurpleAgentDemo';
 
 // Type for benchmark result that can be passed to report generator
 interface ScenarioResult {
@@ -52,7 +53,7 @@ interface ApiHealth {
 }
 
 export default function HE300Dashboard() {
-  const [activeTab, setActiveTab] = useState<'models' | 'benchmark' | 'reports' | 'settings'>('benchmark');
+  const [activeTab, setActiveTab] = useState<'demo' | 'models' | 'benchmark' | 'reports' | 'settings'>('demo');
   const [apiBaseUrl, setApiBaseUrl] = useState<string | null>(null);
   const [apiHealth, setApiHealth] = useState<ApiHealth | null>(null);
   const [lastBenchmarkResult, setLastBenchmarkResult] = useState<BenchmarkResult | null>(null);
@@ -107,6 +108,7 @@ export default function HE300Dashboard() {
   };
 
   const tabs = [
+    { id: 'demo' as const, label: '🟣 Purple Agent Demo', icon: '🟣' },
     { id: 'benchmark' as const, label: '🧪 Benchmark', icon: '🧪' },
     { id: 'models' as const, label: '🤖 Models', icon: '🤖' },
     { id: 'reports' as const, label: '📄 Reports & Publishing', icon: '📄' },
@@ -234,6 +236,10 @@ export default function HE300Dashboard() {
 
         {/* Tab Content */}
         <div className="space-y-6">
+          {activeTab === 'demo' && (
+            <PurpleAgentDemo apiBaseUrl={apiBaseUrl} />
+          )}
+
           {activeTab === 'models' && (
             <ModelManager apiBaseUrl={apiBaseUrl} />
           )}
