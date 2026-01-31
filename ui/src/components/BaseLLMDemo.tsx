@@ -177,6 +177,14 @@ const BaseLLMDemo: React.FC<BaseLLMDemoProps> = ({ apiBaseUrl = 'http://localhos
         <p className="mt-2 text-green-100">
           Direct LLM evaluation without reasoning pipeline - raw model ethics capabilities
         </p>
+        <div className="mt-2 flex items-center gap-2">
+          <span className="px-2 py-1 bg-green-500 bg-opacity-30 rounded text-xs font-medium">
+            Protocol: Direct API
+          </span>
+          <span className="px-2 py-1 bg-green-500 bg-opacity-30 rounded text-xs font-mono">
+            POST /he300/batch
+          </span>
+        </div>
       </div>
 
       {/* Configuration Panel */}

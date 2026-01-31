@@ -267,6 +267,14 @@ const EEEPurpleDemo: React.FC<EEEPurpleDemoProps> = ({ apiBaseUrl = 'http://loca
         <p className="mt-2 text-purple-100">
           EthicsEngine Enterprise reasoning pipeline with configurable ethical frameworks
         </p>
+        <div className="mt-2 flex items-center gap-2">
+          <span className="px-2 py-1 bg-purple-500 bg-opacity-30 rounded text-xs font-medium">
+            Protocol: A2A (Agent-to-Agent)
+          </span>
+          <span className="px-2 py-1 bg-purple-500 bg-opacity-30 rounded text-xs font-mono">
+            POST http://localhost:9000/a2a
+          </span>
+        </div>
       </div>
 
       {/* Container Management */}

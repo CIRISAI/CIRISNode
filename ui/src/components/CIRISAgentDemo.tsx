@@ -277,6 +277,14 @@ const CIRISAgentDemo: React.FC<CIRISAgentDemoProps> = ({ apiBaseUrl = 'http://lo
         <p className="mt-1 text-indigo-200 text-sm">
           Note: H3ERE uses multiple LLM calls per scenario. Expect longer latency and higher cost.
         </p>
+        <div className="mt-2 flex items-center gap-2">
+          <span className="px-2 py-1 bg-indigo-500 bg-opacity-30 rounded text-xs font-medium">
+            Protocol: A2A (Agent-to-Agent)
+          </span>
+          <span className="px-2 py-1 bg-indigo-500 bg-opacity-30 rounded text-xs font-mono">
+            POST http://localhost:9001/a2a
+          </span>
+        </div>
       </div>
 
       {/* Container Management */}

@@ -1,52 +1,44 @@
 "use client";
 import React, { useState, useEffect } from 'react';
 import ModelManager from '@/components/ModelManager';
-import HE300Runner from '@/components/HE300Runner';
+import AgentBenchmarkRunner from '@/components/AgentBenchmarkRunner';
 import ReportGenerator from '@/components/ReportGenerator';
 import TracingConfig from '@/components/TracingConfig';
 import BaseLLMDemo from '@/components/BaseLLMDemo';
 import EEEPurpleDemo from '@/components/EEEPurpleDemo';
 import CIRISAgentDemo from '@/components/CIRISAgentDemo';
 
-// Type for benchmark result that can be passed to report generator
-interface ScenarioResult {
-  scenario_id: string;
-  category: string;
-  input_text: string;
-  expected_label: number | null;
-  predicted_label: number | null;
-  model_response: string;
-  is_correct: boolean;
-  latency_ms: number;
-  error: string | null;
-  trace_id?: string | null;
-  trace_url?: string | null;
-}
-
-interface CategoryResult {
-  total: number;
-  correct: number;
-  accuracy: number;
-  avg_latency_ms: number;
-  errors: number;
-}
-
-interface BenchmarkResult {
-  batch_id: string;
-  status: string;
-  results: ScenarioResult[];
-  summary: {
+// Type for benchmark result from AgentBenchmarkRunner
+interface CategoryBreakdown {
+  [key: string]: {
     total: number;
     correct: number;
     accuracy: number;
     avg_latency_ms: number;
-    by_category: Record<string, CategoryResult>;
     errors: number;
   };
-  identity_id: string;
-  guidance_id: string;
+}
+
+interface BenchmarkResult {
+  batch_id: string;
+  agent_name: string;
+  model: string;
+  accuracy: number;
+  total_scenarios: number;
+  correct: number;
+  errors: number;
+  categories: CategoryBreakdown;
+  avg_latency_ms: number;
   processing_time_ms: number;
-  model_name?: string;
+  concurrency_used: number;
+  protocol: string;
+  semantic_evaluation: boolean;
+  random_seed: number | null;
+  // Agent card info
+  agent_card_name?: string;
+  agent_card_version?: string;
+  agent_card_provider?: string;
+  agent_card_did?: string;
 }
 
 interface ApiHealth {
@@ -168,7 +160,7 @@ export default function HE300Dashboard() {
               {lastBenchmarkResult && (
                 <div className="flex items-center gap-2 px-3 py-1 bg-indigo-50 rounded-lg">
                   <span className="text-sm text-indigo-700">
-                    Last run: <strong>{(lastBenchmarkResult.summary.accuracy * 100).toFixed(1)}%</strong> accuracy
+                    Last run: <strong>{(lastBenchmarkResult.accuracy * 100).toFixed(1)}%</strong> accuracy
                   </span>
                   <button
                     onClick={() => setActiveTab('reports')}
@@ -257,8 +249,8 @@ export default function HE300Dashboard() {
           )}
 
           {activeTab === 'benchmark' && (
-            <HE300Runner 
-              apiBaseUrl={apiBaseUrl} 
+            <AgentBenchmarkRunner
+              apiBaseUrl={apiBaseUrl}
               onBenchmarkComplete={handleBenchmarkComplete}
             />
           )}
@@ -286,31 +278,31 @@ export default function HE300Dashboard() {
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-center">
               <div className="bg-gray-50 p-3 rounded">
                 <p className="text-2xl font-bold text-indigo-600">
-                  {(lastBenchmarkResult.summary.accuracy * 100).toFixed(1)}%
+                  {(lastBenchmarkResult.accuracy * 100).toFixed(1)}%
                 </p>
                 <p className="text-xs text-gray-500">Accuracy</p>
               </div>
               <div className="bg-gray-50 p-3 rounded">
                 <p className="text-2xl font-bold text-gray-900">
-                  {lastBenchmarkResult.summary.total}
+                  {lastBenchmarkResult.total_scenarios}
                 </p>
                 <p className="text-xs text-gray-500">Scenarios</p>
               </div>
               <div className="bg-gray-50 p-3 rounded">
                 <p className="text-2xl font-bold text-green-600">
-                  {lastBenchmarkResult.summary.correct}
+                  {lastBenchmarkResult.correct}
                 </p>
                 <p className="text-xs text-gray-500">Correct</p>
               </div>
               <div className="bg-gray-50 p-3 rounded">
                 <p className="text-2xl font-bold text-gray-900">
-                  {lastBenchmarkResult.summary.avg_latency_ms.toFixed(0)}ms
+                  {lastBenchmarkResult.avg_latency_ms.toFixed(0)}ms
                 </p>
                 <p className="text-xs text-gray-500">Avg Latency</p>
               </div>
               <div className="bg-gray-50 p-3 rounded">
                 <p className="text-2xl font-bold text-red-600">
-                  {lastBenchmarkResult.summary.errors}
+                  {lastBenchmarkResult.errors}
                 </p>
                 <p className="text-xs text-gray-500">Errors</p>
               </div>
