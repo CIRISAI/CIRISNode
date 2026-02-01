@@ -205,6 +205,8 @@ const BaseLLMDemo: React.FC<BaseLLMDemoProps> = ({ apiBaseUrl = 'http://localhos
   const errorCount = results.filter(r => r.error).length;
   const accuracy = results.length > 0 ? (correctCount / results.length) * 100 : 0;
 
+  const [showInfo, setShowInfo] = useState(true);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -223,6 +225,160 @@ const BaseLLMDemo: React.FC<BaseLLMDemoProps> = ({ apiBaseUrl = 'http://localhos
             POST /he300/batch
           </span>
         </div>
+      </div>
+
+      {/* HE-300 Information Panel */}
+      <div className="bg-white shadow rounded-lg overflow-hidden">
+        <button
+          onClick={() => setShowInfo(!showInfo)}
+          className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-gray-50 transition-colors"
+        >
+          <h3 className="text-lg font-medium text-gray-900 flex items-center gap-2">
+            <span>📚</span> About HE-300 Benchmark
+          </h3>
+          <span className="text-gray-400">{showInfo ? '▼' : '▶'}</span>
+        </button>
+
+        {showInfo && (
+          <div className="px-6 pb-6 border-t border-gray-100">
+            <div className="mt-4 prose prose-sm max-w-none">
+              <p className="text-gray-600">
+                The <strong>HE-300</strong> (Hendrycks Ethics 300) benchmark evaluates AI models on ethical reasoning
+                across 300 carefully selected scenarios from the{' '}
+                <a
+                  href="https://arxiv.org/abs/2008.02275"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-indigo-600 hover:text-indigo-800"
+                >
+                  ETHICS dataset paper (Hendrycks et al., 2021)
+                </a>
+                . The scenarios are drawn from five ethical categories, each with distinct evaluation criteria.
+              </p>
+
+              {/* Category Cards */}
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 not-prose">
+                {/* Commonsense */}
+                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <h4 className="font-semibold text-blue-900 mb-2">Commonsense Ethics</h4>
+                  <p className="text-sm text-blue-800 mb-2">
+                    Basic moral intuitions about everyday actions.
+                  </p>
+                  <div className="text-xs space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-green-700 font-medium">Label 0:</span>
+                      <span className="text-gray-600">ETHICAL / Acceptable</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-red-700 font-medium">Label 1:</span>
+                      <span className="text-gray-600">UNETHICAL / Wrong</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Deontology */}
+                <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
+                  <h4 className="font-semibold text-purple-900 mb-2">Deontology</h4>
+                  <p className="text-sm text-purple-800 mb-2">
+                    Duty-based ethics: Is the excuse for not doing something valid?
+                  </p>
+                  <div className="text-xs space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-green-700 font-medium">Label 0:</span>
+                      <span className="text-gray-600">REASONABLE excuse</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-red-700 font-medium">Label 1:</span>
+                      <span className="text-gray-600">UNREASONABLE excuse</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Justice */}
+                <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
+                  <h4 className="font-semibold text-amber-900 mb-2">Justice</h4>
+                  <p className="text-sm text-amber-800 mb-2">
+                    Fairness in treatment: Is the differential treatment justified?
+                  </p>
+                  <div className="text-xs space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-green-700 font-medium">Label 0:</span>
+                      <span className="text-gray-600">FAIR / Just treatment</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-red-700 font-medium">Label 1:</span>
+                      <span className="text-gray-600">UNFAIR / Unjust</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Virtue */}
+                <div className="p-4 bg-emerald-50 rounded-lg border border-emerald-200">
+                  <h4 className="font-semibold text-emerald-900 mb-2">Virtue Ethics</h4>
+                  <p className="text-sm text-emerald-800 mb-2">
+                    Character traits: Does the behavior match the stated virtue?
+                  </p>
+                  <div className="text-xs space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-red-700 font-medium">Label 0:</span>
+                      <span className="text-gray-600">CONTRADICTS trait</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-green-700 font-medium">Label 1:</span>
+                      <span className="text-gray-600">MATCHES trait</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Commonsense Hard */}
+                <div className="p-4 bg-rose-50 rounded-lg border border-rose-200">
+                  <h4 className="font-semibold text-rose-900 mb-2">Commonsense (Hard)</h4>
+                  <p className="text-sm text-rose-800 mb-2">
+                    Edge cases with subtle context differences.
+                  </p>
+                  <div className="text-xs space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-green-700 font-medium">Label 0:</span>
+                      <span className="text-gray-600">ETHICAL / Acceptable</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-red-700 font-medium">Label 1:</span>
+                      <span className="text-gray-600">UNETHICAL / Wrong</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Links */}
+              <div className="mt-4 flex flex-wrap gap-3">
+                <a
+                  href="https://arxiv.org/abs/2008.02275"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm rounded-lg transition-colors"
+                >
+                  📄 Research Paper (arXiv)
+                </a>
+                <a
+                  href="https://github.com/hendrycks/ethics"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm rounded-lg transition-colors"
+                >
+                  💻 Dataset (GitHub)
+                </a>
+                <a
+                  href="https://huggingface.co/datasets/hendrycks/ethics"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm rounded-lg transition-colors"
+                >
+                  🤗 HuggingFace Dataset
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Configuration Panel */}
