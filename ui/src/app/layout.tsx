@@ -17,8 +17,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CIRISBench - HE-300 Ethics Benchmark",
-  description: "AI Agent Ethics Benchmarking Platform - Hendrycks Ethics evaluation with MCP and A2A protocol support",
+  title: "CIRIS.AI Alignment Node",
+  description: "Human Oversight & Ethics Benchmark Server - Hendrycks HE-300 evaluation with MCP and A2A protocol support",
 };
 
 export default async function RootLayout({
