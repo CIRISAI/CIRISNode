@@ -33,7 +33,8 @@ interface ResultPreview {
   agent_card_version?: string;
   agent_card_provider?: string;
   agent_card_did?: string;
-  summary: {
+  // Nested summary format (base_llm, reports)
+  summary?: {
     total: number;
     correct: number;
     accuracy: number;
@@ -41,6 +42,13 @@ interface ResultPreview {
     errors: number;
     by_category?: Record<string, { total: number; correct: number; accuracy: number }>;
   };
+  // Flat agentbeats format
+  accuracy?: number;
+  total_scenarios?: number;
+  correct?: number;
+  avg_latency_ms?: number;
+  errors?: number;
+  categories?: Record<string, { total: number; correct: number; accuracy: number; errors?: number }>;
   results?: Array<{
     scenario_id: string;
     category: string;
@@ -354,8 +362,9 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
   // Convert benchmark result to report request format
   const buildReportRequest = (benchmarkResult: Record<string, unknown>, format: string) => {
     const summary = benchmarkResult.summary as Record<string, unknown> || {};
-    const byCategory = summary.by_category as Record<string, Record<string, number>> || {};
-    
+    // Handle both summary.by_category and flat categories format (agentbeats)
+    const byCategory = (summary.by_category || benchmarkResult.categories) as Record<string, Record<string, number>> || {};
+
     // Build category results array
     const categories = Object.entries(byCategory).map(([name, data]) => ({
       category: name,
@@ -419,11 +428,11 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
         agent_card_skills: benchmarkResult.agent_card_skills as string[] || [],
         identity_id: benchmarkResult.identity_id as string || 'default',
         guidance_id: benchmarkResult.guidance_id as string || 'default',
-        total_scenarios: (summary.total as number) || scenarios.length,
-        correct_predictions: (summary.correct as number) || 0,
-        overall_accuracy: (summary.accuracy as number) || 0,
-        avg_latency_ms: (summary.avg_latency_ms as number) || 0,
-        total_errors: (summary.errors as number) || 0,
+        total_scenarios: (summary.total as number) || (benchmarkResult.total_scenarios as number) || scenarios.length,
+        correct_predictions: (summary.correct as number) || (benchmarkResult.correct as number) || 0,
+        overall_accuracy: (summary.accuracy as number) || (benchmarkResult.accuracy as number) || 0,
+        avg_latency_ms: (summary.avg_latency_ms as number) || (benchmarkResult.avg_latency_ms as number) || 0,
+        total_errors: (summary.errors as number) || (benchmarkResult.errors as number) || 0,
         categories: categories,
         started_at: benchmarkResult.started_at as string || now,
         completed_at: benchmarkResult.completed_at as string || now,
@@ -807,35 +816,35 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
             </div>
           ) : previewResult && (
             <div className="p-4 space-y-4">
-              {/* Summary Stats */}
+              {/* Summary Stats - handle both summary object and flat agentbeats format */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <div className="bg-gray-700/50 rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-blue-400">
-                    {((previewResult.summary?.accuracy || 0) * 100).toFixed(1)}%
+                    {(((previewResult.summary?.accuracy ?? previewResult.accuracy) || 0) * 100).toFixed(1)}%
                   </p>
                   <p className="text-xs text-gray-400">Accuracy</p>
                 </div>
                 <div className="bg-gray-700/50 rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-white">
-                    {previewResult.summary?.total || 0}
+                    {previewResult.summary?.total ?? previewResult.total_scenarios ?? 0}
                   </p>
                   <p className="text-xs text-gray-400">Total</p>
                 </div>
                 <div className="bg-gray-700/50 rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-green-400">
-                    {previewResult.summary?.correct || 0}
+                    {previewResult.summary?.correct ?? previewResult.correct ?? 0}
                   </p>
                   <p className="text-xs text-gray-400">Correct</p>
                 </div>
                 <div className="bg-gray-700/50 rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-gray-300">
-                    {(previewResult.summary?.avg_latency_ms || 0).toFixed(0)}ms
+                    {((previewResult.summary?.avg_latency_ms ?? previewResult.avg_latency_ms) || 0).toFixed(0)}ms
                   </p>
                   <p className="text-xs text-gray-400">Avg Latency</p>
                 </div>
                 <div className="bg-gray-700/50 rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-red-400">
-                    {previewResult.summary?.errors || 0}
+                    {previewResult.summary?.errors ?? previewResult.errors ?? 0}
                   </p>
                   <p className="text-xs text-gray-400">Errors</p>
                 </div>
@@ -868,32 +877,35 @@ export default function ReportGenerator({ apiBaseUrl: propApiBaseUrl }: ReportGe
                 )}
               </div>
 
-              {/* Category Breakdown */}
-              {previewResult.summary?.by_category && Object.keys(previewResult.summary.by_category).length > 0 && (
-                <div>
-                  <h4 className="text-sm font-medium text-gray-300 mb-2">Category Breakdown</h4>
-                  <div className="space-y-2">
-                    {Object.entries(previewResult.summary.by_category).map(([cat, data]) => (
-                      <div key={cat} className="flex items-center gap-3">
-                        <span className="text-sm text-gray-400 w-32 truncate" title={cat}>{cat}</span>
-                        <div className="flex-1 h-2 bg-gray-700 rounded-full">
-                          <div
-                            className={`h-2 rounded-full ${
-                              (data.accuracy || 0) >= 0.8 ? 'bg-green-500' :
-                              (data.accuracy || 0) >= 0.5 ? 'bg-yellow-500' :
-                              'bg-red-500'
-                            }`}
-                            style={{ width: `${(data.accuracy || 0) * 100}%` }}
-                          />
+              {/* Category Breakdown - handle both summary.by_category and flat categories */}
+              {(() => {
+                const categoryData = previewResult.summary?.by_category || previewResult.categories;
+                return categoryData && Object.keys(categoryData).length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-300 mb-2">Category Breakdown</h4>
+                    <div className="space-y-2">
+                      {Object.entries(categoryData).map(([cat, data]: [string, { accuracy?: number; correct?: number; total?: number }]) => (
+                        <div key={cat} className="flex items-center gap-3">
+                          <span className="text-sm text-gray-400 w-32 truncate" title={cat}>{cat}</span>
+                          <div className="flex-1 h-2 bg-gray-700 rounded-full">
+                            <div
+                              className={`h-2 rounded-full ${
+                                (data.accuracy || 0) >= 0.8 ? 'bg-green-500' :
+                                (data.accuracy || 0) >= 0.5 ? 'bg-yellow-500' :
+                                'bg-red-500'
+                              }`}
+                              style={{ width: `${(data.accuracy || 0) * 100}%` }}
+                            />
+                          </div>
+                          <span className="text-sm text-gray-300 w-24 text-right">
+                            {((data.accuracy || 0) * 100).toFixed(1)}% ({data.correct || 0}/{data.total || 0})
+                          </span>
                         </div>
-                        <span className="text-sm text-gray-300 w-24 text-right">
-                          {((data.accuracy || 0) * 100).toFixed(1)}% ({data.correct || 0}/{data.total || 0})
-                        </span>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Sample Scenarios */}
               {previewResult.results && previewResult.results.length > 0 && (
