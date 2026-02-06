@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     matrix_room_id: str = ""
     node_api_url: str = ""
     REDIS_URL: str = "redis://localhost:6379/0"  # Default Redis URL
+    DATABASE_URL: str = "postgresql://postgres:password@db:5432/cirisnode"  # PostgreSQL for evaluations read path
     app_name: str = "CIRISNode"
     max_concurrent_requests: int = 100
     JWT_SECRET: str = "your-jwt-secret"  # Replace with a secure secret
