@@ -103,10 +103,27 @@ class EEEClient:
         self._client: Optional[httpx.AsyncClient] = None
     
     async def __aenter__(self) -> "EEEClient":
+        headers = {"Content-Type": "application/json"}
+
+        # Attach a service JWT so Engine auth accepts our requests
+        jwt_secret = getattr(settings, "JWT_SECRET", None)
+        if jwt_secret and jwt_secret not in ("", "change-this"):
+            try:
+                import jwt as pyjwt
+                import time
+                token = pyjwt.encode(
+                    {"sub": "cirisnode-service", "iat": int(time.time()), "exp": int(time.time()) + 3600},
+                    jwt_secret,
+                    algorithm="HS256",
+                )
+                headers["Authorization"] = f"Bearer {token}"
+            except Exception as exc:
+                logger.warning("Failed to create service JWT for EEE auth: %s", exc)
+
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(self.timeout),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         return self
     
