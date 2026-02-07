@@ -164,3 +164,11 @@ class EvaluationsListResponse(BaseModel):
     total: int
     page: int
     per_page: int
+
+
+class UsageResponse(BaseModel):
+    """Response for GET /api/v1/usage — free-tier usage meter."""
+    runs_this_week: int
+    limit: int
+    can_run: bool
+    resets_at: Optional[datetime] = None

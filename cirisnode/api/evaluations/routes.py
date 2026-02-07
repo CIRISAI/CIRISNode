@@ -3,10 +3,12 @@
 GET   /api/v1/evaluations       — tenant's own evals + public evals
 GET   /api/v1/evaluations/{id}  — full detail (owner or public)
 PATCH /api/v1/evaluations/{id}  — update visibility/agent_name (owner only)
+GET   /api/v1/usage             — free-tier usage meter
 """
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -19,11 +21,48 @@ from cirisnode.schema.evaluation_schemas import (
     EvaluationPatchRequest,
     EvaluationsListResponse,
     EvaluationSummary,
+    UsageResponse,
 )
 
 logger = logging.getLogger(__name__)
 
 evaluations_router = APIRouter(prefix="/api/v1/evaluations", tags=["evaluations"])
+usage_router = APIRouter(prefix="/api/v1", tags=["usage"])
+
+FREE_TIER_WEEKLY_LIMIT = 1
+
+USAGE_SQL = """
+    SELECT count(*) FROM evaluations
+    WHERE tenant_id = $1
+      AND eval_type = 'client'
+      AND created_at > $2
+"""
+
+
+@usage_router.get("/usage", response_model=UsageResponse)
+async def get_usage(
+    actor: str = Depends(validate_a2a_auth),
+):
+    """Return free-tier usage for the authenticated user (runs this week)."""
+    now = datetime.now(timezone.utc)
+    # Reset window: Monday 00:00 UTC of the current week
+    days_since_monday = now.weekday()
+    week_start = (now - timedelta(days=days_since_monday)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    next_reset = week_start + timedelta(days=7)
+
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        runs = await conn.fetchval(USAGE_SQL, actor, week_start)
+
+    runs = runs or 0
+    return UsageResponse(
+        runs_this_week=runs,
+        limit=FREE_TIER_WEEKLY_LIMIT,
+        can_run=runs < FREE_TIER_WEEKLY_LIMIT,
+        resets_at=next_reset,
+    )
 
 
 # ---------------------------------------------------------------------------

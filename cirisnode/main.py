@@ -14,7 +14,7 @@ from cirisnode.api.wa.routes import wa_router
 from cirisnode.api.config.routes import config_router
 from cirisnode.api.a2a.routes import a2a_router, agent_card_router
 from cirisnode.api.scores.routes import scores_router
-from cirisnode.api.evaluations.routes import evaluations_router
+from cirisnode.api.evaluations.routes import evaluations_router, usage_router
 from cirisnode.mcp.transport import mcp_app
 import os
 
@@ -73,6 +73,7 @@ app.include_router(a2a_router)          # /a2a
 # Unified Evaluation Pipeline — read path
 app.include_router(scores_router)       # /api/v1/scores, /leaderboard, /embed/scores
 app.include_router(evaluations_router)  # /api/v1/evaluations
+app.include_router(usage_router)        # /api/v1/usage
 
 # MCP Server (mounted as sub-application)
 app.mount("/mcp", mcp_app)              # /mcp/sse, /mcp/messages/
