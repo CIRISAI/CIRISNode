@@ -145,9 +145,11 @@ async def _proxy_to_engine(
         )
 
     if resp.status_code != 200:
-        detail = resp.text[:500]
-        logger.error("Engine returned %d: %s", resp.status_code, detail)
-        raise HTTPException(status_code=resp.status_code, detail=detail)
+        logger.error("Engine returned %d: %s", resp.status_code, resp.text[:500])
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail="Benchmark engine error. Check server logs for details.",
+        )
 
     return resp.json()
 

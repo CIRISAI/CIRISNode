@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query, Path, Header
 from cirisnode.database import get_db
 from cirisnode.utils.audit import fetch_audit_logs
 from cirisnode.api.auth.routes import get_actor_from_token
+from cirisnode.utils.rbac import require_role
 
 audit_router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 
@@ -19,20 +20,20 @@ async def get_audit_logs(
     logs = fetch_audit_logs(conn, limit=limit, offset=offset, actor=actor)
     return {"logs": logs}
 
-@audit_router.delete("/logs/{log_id}")
+@audit_router.delete("/logs/{log_id}", dependencies=[Depends(require_role(["admin"]))])
 async def delete_audit_log(log_id: int = Path(..., description="Log ID must not be null"), db=Depends(get_db)):
     """
-    Delete an audit log entry by ID.
+    Delete an audit log entry by ID. Requires admin role.
     """
     conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
     conn.execute("DELETE FROM audit_logs WHERE id = ?", (log_id,))
     conn.commit()
     return {"id": log_id, "status": "deleted"}
 
-@audit_router.patch("/logs/{log_id}/archive")
+@audit_router.patch("/logs/{log_id}/archive", dependencies=[Depends(require_role(["admin"]))])
 async def archive_audit_log(archived: bool, log_id: int = Path(..., description="Log ID must not be null"), db=Depends(get_db)):
     """
-    Archive or unarchive an audit log entry by ID.
+    Archive or unarchive an audit log entry by ID. Requires admin role.
     """
     conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
     conn.execute("UPDATE audit_logs SET archived = ? WHERE id = ?", (1 if archived else 0, log_id))

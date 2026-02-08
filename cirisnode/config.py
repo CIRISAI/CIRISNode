@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://postgres:password@db:5432/cirisnode"  # PostgreSQL for evaluations read path
     app_name: str = "CIRISNode"
     max_concurrent_requests: int = 100
-    JWT_SECRET: str = "your-jwt-secret"  # Replace with a secure secret
+    JWT_SECRET: str = ""  # REQUIRED — set via JWT_SECRET env var or .env file
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     VERSION: str = "0.2.0"  # Bumped version for EEE integration
     PUBLIC_KEY: str = ""  # Add public key
@@ -44,6 +44,3 @@ class Settings(BaseSettings):
         extra = Extra.allow  # Allow extra env vars (e.g., frontend-only vars in .env)
 
 settings = Settings()
-
-# Add a symmetric key for HS256
-HS256_SECRET_KEY = "your-symmetric-key"  # Replace with a securely generated key

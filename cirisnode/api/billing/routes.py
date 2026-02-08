@@ -10,6 +10,8 @@ import logging
 import time
 from typing import Optional
 
+_SAFE_ERROR_CODES = {400: "Bad request", 401: "Unauthorized", 403: "Forbidden", 503: "Service unavailable"}
+
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
@@ -24,6 +26,13 @@ billing_router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
 
 def _engine_base_url() -> str:
     return settings.EEE_BASE_URL.rstrip("/")
+
+
+def _safe_upstream_error(resp) -> HTTPException:
+    """Return a sanitized error — never leak raw Engine responses to clients."""
+    logger.error("Engine returned %d: %s", resp.status_code, resp.text[:500])
+    detail = _SAFE_ERROR_CODES.get(resp.status_code, "Billing request failed")
+    return HTTPException(status_code=resp.status_code, detail=detail)
 
 
 def _service_jwt() -> str:
@@ -104,7 +113,7 @@ async def proxy_checkout(
         raise HTTPException(status_code=502, detail="Billing service unavailable")
 
     if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text[:500])
+        raise _safe_upstream_error(resp)
     return resp.json()
 
 
@@ -126,7 +135,7 @@ async def proxy_portal(
         raise HTTPException(status_code=502, detail="Billing service unavailable")
 
     if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text[:500])
+        raise _safe_upstream_error(resp)
     return resp.json()
 
 
@@ -149,5 +158,5 @@ async def proxy_webhook(request: Request):
         raise HTTPException(status_code=502, detail="Billing service unavailable")
 
     if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text[:500])
+        raise _safe_upstream_error(resp)
     return resp.json()

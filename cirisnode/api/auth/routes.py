@@ -189,10 +189,18 @@ def delete_user(username: str, Authorization: str = Header(...), db=Depends(get_
 
 @auth_router.get("/auth/me", response_model=UserOut)
 def get_me(request: Request, db=Depends(get_db)):
-    # Try to get user email from X-User-Email header (set by frontend from session)
-    email = request.headers.get("x-user-email")
+    # Prefer JWT token for identity (not spoofable)
+    auth_header = request.headers.get("authorization", "")
+    email = None
+    if auth_header.startswith("Bearer "):
+        actor = get_actor_from_token(auth_header)
+        if actor != "unknown":
+            email = actor
+    # Fallback: X-User-Email (trusted only behind reverse proxy)
     if not email:
-        raise HTTPException(status_code=401, detail="Missing user email header")
+        email = request.headers.get("x-user-email")
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
     conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
     user = conn.execute("SELECT id, username, role, groups, oauth_provider, oauth_sub FROM users WHERE username = ?", (email,)).fetchone()
     if not user:

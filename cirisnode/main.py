@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from cirisnode.api.audit.routes import audit_router
 from cirisnode.api.benchmarks.routes import simplebench_router, benchmarks_router
 from cirisnode.api.ollama.routes import ollama_router
@@ -48,20 +49,40 @@ app = FastAPI(lifespan=lifespan)
 
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "https://node0.ciris.ai")
 
+_allowed_origins = [
+    FRONTEND_ORIGIN,
+    "https://ciris.ai",
+    "https://www.ciris.ai",
+    "https://ethicsengine.org",
+    "https://www.ethicsengine.org",
+    "https://admin.ethicsengine.org",
+]
+# Only allow localhost in development
+if os.getenv("NODE_ENV", "production") == "development":
+    _allowed_origins.append("http://localhost:3000")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        FRONTEND_ORIGIN,
-        "https://ciris.ai",
-        "https://www.ciris.ai",
-        "https://ethicsengine.org",
-        "https://www.ethicsengine.org",
-        "http://localhost:3000",
-    ],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-API-Key", "stripe-signature"],
 )
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Existing routers
 app.include_router(audit_router)
