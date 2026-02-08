@@ -1,5 +1,6 @@
 """Billing proxy — CIRISNode gateway to Engine /billing endpoints.
 
+GET  /api/v1/billing/plans     — Public tier/plan definitions (no auth)
 POST /api/v1/billing/checkout  — Get Stripe Checkout URL (auth required)
 GET  /api/v1/billing/portal    — Get Stripe Customer Portal URL (auth required)
 POST /api/v1/billing/webhook   — Stripe webhook (forwarded raw to Engine)
@@ -13,6 +14,7 @@ import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from cirisnode.api.agentbeats.auth import resolve_actor
+from cirisnode.api.agentbeats.quota import TIERS
 from cirisnode.config import settings
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,52 @@ def _service_jwt() -> str:
         settings.JWT_SECRET,
         algorithm="HS256",
     )
+
+
+_PLAN_PRICES = {
+    "community": {"amount": 0, "formatted": "Free"},
+    "pro": {"amount": 39900, "formatted": "$399/mo"},
+    "enterprise": {"amount": None, "formatted": "Custom"},
+}
+
+
+@billing_router.get("/plans")
+async def list_plans():
+    """Return available subscription plans (public, no auth required)."""
+    plans = []
+    for name, tier_def in TIERS.items():
+        price = _PLAN_PRICES.get(name, {"amount": None, "formatted": "Contact us"})
+        plans.append({
+            "id": name,
+            "name": name.capitalize(),
+            "price": price["formatted"],
+            "price_cents": price["amount"],
+            "limit": tier_def["limit"],
+            "window": tier_def["window"],
+            "features": _plan_features(name),
+        })
+    return {"plans": plans}
+
+
+def _plan_features(plan: str) -> list[str]:
+    """Return feature list per plan for display."""
+    base = ["HE-300 benchmark access", "Public leaderboard"]
+    if plan == "community":
+        return base + ["1 evaluation per week", "Community support"]
+    if plan == "pro":
+        return base + [
+            "100 evaluations per month",
+            "Private evaluation results",
+            "Priority support",
+            "API access",
+        ]
+    return base + [
+        "Unlimited evaluations",
+        "Private evaluation results",
+        "Dedicated support",
+        "Custom integrations",
+        "SLA guarantee",
+    ]
 
 
 @billing_router.post("/checkout")
