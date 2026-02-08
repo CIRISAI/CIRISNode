@@ -29,8 +29,15 @@ import os
 async def lifespan(app: FastAPI):
     from cirisnode.db.pg_pool import get_pg_pool, close_pg_pool
     from cirisnode.utils.redis_cache import get_redis, close_redis
-    await get_pg_pool()
+    pool = await get_pg_pool()
     await get_redis()
+    # Run pending SQL migrations (best-effort — logs errors, doesn't crash)
+    try:
+        from cirisnode.db.migrator import run_migrations
+        await run_migrations(pool)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Migration runner failed: %s", exc)
     yield
     await close_pg_pool()
     await close_redis()
