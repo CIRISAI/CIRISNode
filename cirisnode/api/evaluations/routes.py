@@ -3,7 +3,7 @@
 GET   /api/v1/evaluations       — tenant's own evals + public evals
 GET   /api/v1/evaluations/{id}  — full detail (owner or public)
 PATCH /api/v1/evaluations/{id}  — update visibility/agent_name (owner only)
-GET   /api/v1/usage             — free-tier usage meter
+GET   /api/v1/usage             — tiered usage meter (Community / Pro / Enterprise)
 """
 
 import json
@@ -15,6 +15,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from cirisnode.api.a2a.auth import validate_a2a_auth
+from cirisnode.api.agentbeats.quota import get_tenant_tier, get_usage_count, TIERS
 from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.schema.evaluation_schemas import (
     EvaluationDetail,
@@ -29,39 +30,35 @@ logger = logging.getLogger(__name__)
 evaluations_router = APIRouter(prefix="/api/v1/evaluations", tags=["evaluations"])
 usage_router = APIRouter(prefix="/api/v1", tags=["usage"])
 
-FREE_TIER_WEEKLY_LIMIT = 1
 
-USAGE_SQL = """
-    SELECT count(*) FROM evaluations
-    WHERE tenant_id = $1
-      AND eval_type = 'client'
-      AND created_at > $2
-"""
+# ---------------------------------------------------------------------------
+# GET /api/v1/usage — tiered usage meter
+# ---------------------------------------------------------------------------
 
 
 @usage_router.get("/usage", response_model=UsageResponse)
 async def get_usage(
     actor: str = Depends(validate_a2a_auth),
 ):
-    """Return free-tier usage for the authenticated user (runs this week)."""
-    now = datetime.now(timezone.utc)
-    # Reset window: Monday 00:00 UTC of the current week
-    days_since_monday = now.weekday()
-    week_start = (now - timedelta(days=days_since_monday)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    next_reset = week_start + timedelta(days=7)
+    """Return tiered usage for the authenticated user.
 
-    pool = await get_pg_pool()
-    async with pool.acquire() as conn:
-        runs = await conn.fetchval(USAGE_SQL, actor, week_start)
+    Tiers:
+      - community (free):   1 eval / week
+      - pro ($399/mo):     100 evals / month
+      - enterprise:        unlimited
+    """
+    tier = await get_tenant_tier(actor)
+    count, limit, reset = await get_usage_count(actor, tier)
+    tier_def = TIERS.get(tier, TIERS["community"])
+    window = tier_def["window"] or "month"
 
-    runs = runs or 0
     return UsageResponse(
-        runs_this_week=runs,
-        limit=FREE_TIER_WEEKLY_LIMIT,
-        can_run=runs < FREE_TIER_WEEKLY_LIMIT,
-        resets_at=next_reset,
+        tier=tier,
+        runs_used=count,
+        limit=limit,
+        can_run=limit is None or count < limit,
+        window=window,
+        resets_at=reset,
     )
 
 
