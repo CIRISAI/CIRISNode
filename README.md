@@ -108,7 +108,9 @@ This project is licensed under GNU AGPL v3.0 © 2025-2026 CIRIS AI Project
 
 ## Deployment
 
-**Security Note:** For production deployments, ensure that the application is served over HTTPS only and that HSTS (HTTP Strict Transport Security) is enabled to enhance security. This is typically handled at the deployment level (e.g., via a reverse proxy like Nginx or a load balancer).
+See **[docs/deployment.md](docs/deployment.md)** for the full production deployment guide, including Caddy/Nginx reverse proxy configuration, CORS setup, and troubleshooting.
+
+**Key point:** CIRISNode handles CORS and security headers via FastAPI middleware. Your reverse proxy should **not** set its own `Access-Control-*` headers — doing so will override the application's CORS policy and break frontend requests. See the deployment guide for details.
 
 ---
 
