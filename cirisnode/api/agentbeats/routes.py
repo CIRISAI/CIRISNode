@@ -3,10 +3,15 @@
 POST  /api/v1/agentbeats/run     — validate auth + quota, proxy to Engine
 GET   /api/v1/agentbeats/status   — proxy Engine agentbeats status
 
-Security model:
-  1. JWT auth required (validate_a2a_auth → actor / tenant_id)
+Security model (managed / node mode — AGENTBEATS_MODE unset):
+  1. JWT auth required (validate_a2a_auth -> actor / tenant_id)
   2. Usage quota enforced BEFORE proxying (Community=1/week, Pro=100/month)
   3. Agent API keys in the spec are forwarded to Engine but never stored by Node
+
+Standalone mode (AGENTBEATS_MODE=true):
+  Auth and quota are bypassed at the CIRISNode layer.  The AgentBeats
+  platform authenticates via AGENTBEATS_API_KEY directly to the Engine
+  (which validates it via ENGINE_API_KEYS).  CIRISNode just proxies.
 """
 
 import logging
@@ -14,10 +19,10 @@ import time
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
-from cirisnode.api.a2a.auth import validate_a2a_auth
+from cirisnode.api.agentbeats.auth import is_standalone, resolve_actor
 from cirisnode.api.agentbeats.quota import check_quota, QuotaDenied
 from cirisnode.config import settings
 
@@ -97,35 +102,23 @@ def _service_jwt() -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# POST /api/v1/agentbeats/run
-# ---------------------------------------------------------------------------
+async def _proxy_to_engine(
+    payload: dict,
+    actor: str,
+    authorization: Optional[str] = None,
+) -> dict:
+    """POST payload to Engine /he300/agentbeats/run and return JSON response.
 
-
-@agentbeats_router.post("/run", response_model=AgentBeatsRunResponse)
-async def run_agentbeats(
-    request: AgentBeatsRunRequest = Body(...),
-    actor: str = Depends(validate_a2a_auth),
-):
-    """Run HE-300 benchmark — auth + quota gated, proxied to Engine.
-
-    1. Validate JWT → actor (tenant_id)
-    2. Check quota (Community 1/week, Pro 100/month, Enterprise unlimited)
-    3. Forward full request to Engine /he300/agentbeats/run
-    4. Return Engine response to frontend
+    In standalone mode, forwards the caller's original Authorization header
+    (AGENTBEATS_API_KEY) so the Engine can validate it.  In managed mode,
+    mints a service JWT.
     """
-    # --- quota gate ---
-    try:
-        await check_quota(actor)
-    except QuotaDenied as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=str(exc),
-        )
-
-    # --- proxy to Engine ---
     engine_url = f"{_engine_base_url()}/he300/agentbeats/run"
-    payload = request.model_dump(mode="json", exclude_none=True)
+
+    if is_standalone() and authorization:
+        auth_header = authorization
+    else:
+        auth_header = f"Bearer {_service_jwt()}"
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(600)) as client:
@@ -133,7 +126,7 @@ async def run_agentbeats(
                 engine_url,
                 json=payload,
                 headers={
-                    "Authorization": f"Bearer {_service_jwt()}",
+                    "Authorization": auth_header,
                     "Content-Type": "application/json",
                     "X-Tenant-Id": actor,
                 },
@@ -160,6 +153,42 @@ async def run_agentbeats(
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/agentbeats/run
+# ---------------------------------------------------------------------------
+
+
+@agentbeats_router.post("/run", response_model=AgentBeatsRunResponse)
+async def run_agentbeats(
+    request: AgentBeatsRunRequest = Body(...),
+    actor: str = Depends(resolve_actor),
+    authorization: Optional[str] = Header(None),
+):
+    """Run HE-300 benchmark — proxied to Engine.
+
+    **Managed mode** (ethicsengine.org):
+      1. JWT auth enforced via resolve_actor -> validate_a2a_auth
+      2. Quota check (Community 1/week, Pro 100/month, Enterprise unlimited)
+      3. Proxy with service JWT
+
+    **Standalone mode** (AGENTBEATS_MODE=true):
+      1. Auth/quota bypassed at Node layer
+      2. Forwards original Authorization header to Engine
+         (Engine validates via ENGINE_API_KEYS / AUTH_ENABLED)
+    """
+    if not is_standalone():
+        try:
+            await check_quota(actor)
+        except QuotaDenied as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=str(exc),
+            )
+
+    payload = request.model_dump(mode="json", exclude_none=True)
+    return await _proxy_to_engine(payload, actor, authorization)
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/agentbeats/status
 # ---------------------------------------------------------------------------
 
@@ -180,9 +209,13 @@ async def agentbeats_status():
     except Exception as exc:
         data = {"parallel_runner_available": False, "error": str(exc)}
 
-    data["tiers"] = {
-        "community": {"limit_per_week": 1, "price": "$0/mo"},
-        "pro": {"limit_per_month": 100, "price": "$399/mo"},
-        "enterprise": {"limit_per_month": None, "price": "Custom"},
-    }
+    if is_standalone():
+        data["mode"] = "standalone"
+    else:
+        data["mode"] = "managed"
+        data["tiers"] = {
+            "community": {"limit_per_week": 1, "price": "$0/mo"},
+            "pro": {"limit_per_month": 100, "price": "$399/mo"},
+            "enterprise": {"limit_per_month": None, "price": "Custom"},
+        }
     return data

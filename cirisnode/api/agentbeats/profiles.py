@@ -17,7 +17,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from cirisnode.api.a2a.auth import validate_a2a_auth
+from cirisnode.api.agentbeats.auth import resolve_actor
 from cirisnode.db.pg_pool import get_pg_pool
 
 logger = logging.getLogger(__name__)
@@ -107,7 +107,7 @@ def _row_to_response(row) -> AgentProfileResponse:
 
 
 @profiles_router.get("", response_model=list[AgentProfileResponse])
-async def list_profiles(actor: str = Depends(validate_a2a_auth)):
+async def list_profiles(actor: str = Depends(resolve_actor)):
     """List all agent profiles for the authenticated tenant."""
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
@@ -123,7 +123,7 @@ async def list_profiles(actor: str = Depends(validate_a2a_auth)):
 @profiles_router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_profile(
     body: AgentProfileCreate = Body(...),
-    actor: str = Depends(validate_a2a_auth),
+    actor: str = Depends(resolve_actor),
 ):
     """Create a new agent profile."""
     profile_id = uuid.uuid4()
@@ -155,7 +155,7 @@ async def create_profile(
 @profiles_router.get("/{profile_id}", response_model=AgentProfileResponse)
 async def get_profile(
     profile_id: str,
-    actor: str = Depends(validate_a2a_auth),
+    actor: str = Depends(resolve_actor),
 ):
     """Get a single agent profile. Must be owned by the tenant."""
     pool = await get_pg_pool()
@@ -179,7 +179,7 @@ async def get_profile(
 async def update_profile(
     profile_id: str,
     body: AgentProfileUpdate = Body(...),
-    actor: str = Depends(validate_a2a_auth),
+    actor: str = Depends(resolve_actor),
 ):
     """Update an existing agent profile. Must be owned by the tenant."""
     pool = await get_pg_pool()
@@ -233,7 +233,7 @@ async def update_profile(
 @profiles_router.delete("/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_profile(
     profile_id: str,
-    actor: str = Depends(validate_a2a_auth),
+    actor: str = Depends(resolve_actor),
 ):
     """Delete an agent profile. Must be owned by the tenant."""
     pool = await get_pg_pool()
