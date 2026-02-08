@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     VERSION: str = "0.2.0"  # Bumped version for EEE integration
     PUBLIC_KEY: str = ""  # Add public key
     
+    # --- Deployment Mode ---
+    # "true" = standalone AgentBeats image (no JWT issuer, API key auth, no quota)
+    # unset/"" = managed node (ethicsengine.org — JWT auth + quota enforced)
+    AGENTBEATS_MODE: str = ""
+
     # --- EthicsEngine Enterprise Integration Settings ---
     EEE_ENABLED: bool = False  # Feature flag - disabled by default for fork safety
     EEE_BASE_URL: str = "http://localhost:8080"  # EthicsEngine Enterprise API URL
