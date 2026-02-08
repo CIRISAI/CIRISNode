@@ -167,8 +167,10 @@ class EvaluationsListResponse(BaseModel):
 
 
 class UsageResponse(BaseModel):
-    """Response for GET /api/v1/usage — free-tier usage meter."""
-    runs_this_week: int
-    limit: int
-    can_run: bool
+    """Response for GET /api/v1/usage — tiered usage meter."""
+    tier: str = "community"  # community | pro | enterprise
+    runs_used: int = 0
+    limit: Optional[int] = None  # None = unlimited (enterprise)
+    can_run: bool = True
+    window: str = "week"  # 'week' (community) or 'month' (pro/enterprise)
     resets_at: Optional[datetime] = None
