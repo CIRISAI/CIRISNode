@@ -17,6 +17,7 @@ from cirisnode.api.scores.routes import scores_router
 from cirisnode.api.evaluations.routes import evaluations_router, usage_router
 from cirisnode.api.agentbeats.routes import agentbeats_router
 from cirisnode.api.agentbeats.profiles import profiles_router
+from cirisnode.api.billing.routes import billing_router
 from cirisnode.mcp.transport import mcp_app
 import os
 
@@ -87,6 +88,9 @@ app.include_router(usage_router)        # /api/v1/usage
 # AgentBeats — benchmark execution + agent profile management
 app.include_router(agentbeats_router)   # /api/v1/agentbeats/run, /status
 app.include_router(profiles_router)     # /api/v1/agent-profiles CRUD
+
+# Billing — Stripe checkout/portal/webhook proxy
+app.include_router(billing_router)     # /api/v1/billing/checkout, /portal, /webhook
 
 # MCP Server (mounted as sub-application)
 app.mount("/mcp", mcp_app)              # /mcp/sse, /mcp/messages/
