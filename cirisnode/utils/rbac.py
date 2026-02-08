@@ -2,7 +2,7 @@ from fastapi import Depends, HTTPException, Header, status
 import jwt
 from cirisnode.config import settings
 
-SECRET_KEY = getattr(settings, "JWT_SECRET", "testsecret")
+SECRET_KEY = getattr(settings, "JWT_SECRET", None) or "testsecret"
 ALGORITHM = "HS256"
 
 

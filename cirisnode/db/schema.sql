@@ -25,7 +25,13 @@ CREATE TABLE IF NOT EXISTS agent_events (
     node_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     agent_uid TEXT,
     event_json TEXT,
-    archived INTEGER DEFAULT 0
+    original_content_hash TEXT,
+    archived INTEGER DEFAULT 0,
+    archived_by TEXT,
+    archived_at TIMESTAMP,
+    deleted INTEGER DEFAULT 0,
+    deleted_by TEXT,
+    deleted_at TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS agent_tokens (
