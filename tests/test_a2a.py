@@ -11,13 +11,15 @@ from fastapi.testclient import TestClient
 import jwt
 
 from cirisnode.main import app
+from cirisnode.config import settings
 from cirisnode.api.a2a.tasks import TaskState, TaskStore, task_store
 from cirisnode.api.a2a.jsonrpc import handle_jsonrpc
 
 client = TestClient(app)
 
-# Test JWT token
-TEST_SECRET = "your-jwt-secret"
+# Test JWT token — use the actual settings JWT_SECRET so auth validation passes
+# (may be overridden by .env in local dev)
+TEST_SECRET = settings.JWT_SECRET
 TEST_TOKEN = jwt.encode(
     {"sub": "test_agent", "role": "admin"},
     TEST_SECRET,
