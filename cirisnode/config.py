@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     app_name: str = "CIRISNode"
     max_concurrent_requests: int = 100
     JWT_SECRET: str = ""  # REQUIRED — set via JWT_SECRET env var or .env file
+    NEXTAUTH_SECRET: str = ""  # Shared with NextAuth frontend (AUTH_SECRET in CF Worker)
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     VERSION: str = "0.2.0"  # Bumped version for EEE integration
     PUBLIC_KEY: str = ""  # Add public key

@@ -2,6 +2,8 @@
 Dual authentication for A2A and MCP endpoints.
 
 Supports both JWT Bearer tokens and API Key (X-API-Key header).
+JWT validation tries the CIRISNode JWT_SECRET first, then falls back
+to the NextAuth NEXTAUTH_SECRET (shared with the frontend AUTH_SECRET).
 API keys are stored in the existing agent_tokens table.
 """
 
@@ -20,16 +22,24 @@ ALGORITHM = "HS256"
 
 
 def _validate_jwt(token: str) -> Optional[dict]:
-    """Validate JWT and return claims, or None if invalid."""
+    """Validate JWT against CIRISNode JWT_SECRET, then NextAuth secret."""
+    # Try CIRISNode-issued JWT (JWT_SECRET)
     try:
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET,
-            algorithms=[ALGORITHM],
-        )
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[ALGORITHM])
         return payload
     except jwt.PyJWTError:
-        return None
+        pass
+
+    # Try NextAuth-issued JWT (NEXTAUTH_SECRET / AUTH_SECRET)
+    nextauth_secret = settings.NEXTAUTH_SECRET
+    if nextauth_secret and nextauth_secret != settings.JWT_SECRET:
+        try:
+            payload = jwt.decode(token, nextauth_secret, algorithms=[ALGORITHM])
+            return payload
+        except jwt.PyJWTError as e:
+            logger.debug("NextAuth JWT validation failed: %s", e)
+
+    return None
 
 
 def _validate_api_key(api_key: str, db) -> Optional[str]:
