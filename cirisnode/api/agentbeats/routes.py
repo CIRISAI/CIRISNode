@@ -1,30 +1,36 @@
-"""AgentBeats benchmark proxy — CIRISNode gateway to Engine.
+"""AgentBeats benchmark — local HE-300 execution inside CIRISNode.
 
-POST  /api/v1/agentbeats/run     — validate auth + quota, proxy to Engine
-GET   /api/v1/agentbeats/status   — proxy Engine agentbeats status
+POST  /api/v1/agentbeats/run     — validate auth + quota, run benchmark locally
+GET   /api/v1/agentbeats/status   — runner status
 
 Security model (managed / node mode — AGENTBEATS_MODE unset):
   1. JWT auth required (validate_a2a_auth -> actor / tenant_id)
-  2. Usage quota enforced BEFORE proxying (Community=1/week, Pro=100/month)
-  3. Agent API keys in the spec are forwarded to Engine but never stored by Node
+  2. Usage quota enforced BEFORE running (Community=1/week, Pro=100/month)
+  3. Agent API keys in the spec are used during benchmark and discarded — never stored
 
 Standalone mode (AGENTBEATS_MODE=true):
-  Auth and quota are bypassed at the CIRISNode layer.  The AgentBeats
-  platform authenticates via AGENTBEATS_API_KEY directly to the Engine
-  (which validates it via ENGINE_API_KEYS).  CIRISNode just proxies.
+  Auth and quota are bypassed at the CIRISNode layer.
 """
 
+import json
 import logging
-import time
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-import httpx
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from cirisnode.api.agentbeats.auth import is_standalone, resolve_actor
 from cirisnode.api.agentbeats.quota import check_quota, QuotaDenied
-from cirisnode.config import settings
+from cirisnode.benchmark.agent_spec import (
+    AgentSpec,
+    OpenAIProtocolConfig,
+)
+from cirisnode.benchmark.badges import compute_badges
+from cirisnode.benchmark.loader import load_scenarios
+from cirisnode.benchmark.runner import run_batch
+from cirisnode.db.pg_pool import get_pg_pool
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +38,12 @@ agentbeats_router = APIRouter(prefix="/api/v1/agentbeats", tags=["agentbeats"])
 
 
 # ---------------------------------------------------------------------------
-# Request / Response schemas (mirror Engine's AgentBeatsBenchmarkRequest)
+# Request / Response schemas
 # ---------------------------------------------------------------------------
 
 
 class AgentBeatsRunRequest(BaseModel):
-    """Request forwarded to Engine /he300/agentbeats/run.
+    """Request for POST /api/v1/agentbeats/run.
 
     Accepts the full typed AgentSpec from the frontend.
     """
@@ -50,7 +56,7 @@ class AgentBeatsRunRequest(BaseModel):
     sample_size: int = Field(default=300, ge=1, le=300)
     categories: Optional[list[str]] = None
     random_seed: Optional[int] = None
-    semantic_evaluation: bool = True
+    semantic_evaluation: bool = False
     timeout_per_scenario: int = Field(default=60, ge=5, le=300)
     api_key: Optional[str] = None
     verify_ssl: bool = True
@@ -85,73 +91,52 @@ class AgentBeatsRunResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _engine_base_url() -> str:
-    """Return Engine base URL (EEE_BASE_URL points at the Engine container)."""
-    return settings.EEE_BASE_URL.rstrip("/")
+def _extract_model_name(spec: AgentSpec) -> str:
+    """Extract the model name from an AgentSpec."""
+    if isinstance(spec.protocol_config, OpenAIProtocolConfig):
+        return spec.protocol_config.model
+    return spec.name
 
 
-def _service_jwt() -> str:
-    """Create a short-lived service JWT for Engine auth."""
-    import jwt as pyjwt
+def _extract_provider(spec: AgentSpec) -> str:
+    """Infer provider from the agent endpoint URL."""
+    url = spec.url.lower()
+    if "openai.com" in url:
+        return "OpenAI"
+    elif "anthropic.com" in url:
+        return "Anthropic"
+    elif "openrouter.ai" in url:
+        return "OpenRouter"
+    elif "together.xyz" in url or "together.ai" in url:
+        return "Together"
+    elif "groq.com" in url:
+        return "Groq"
+    elif "mistral.ai" in url:
+        return "Mistral"
+    elif "deepseek" in url:
+        return "DeepSeek"
+    elif spec.provider and spec.provider.organization:
+        return spec.provider.organization
+    return "Unknown"
 
-    now = int(time.time())
-    return pyjwt.encode(
-        {"sub": "cirisnode-service", "iat": now, "exp": now + 3600},
-        settings.JWT_SECRET,
-        algorithm="HS256",
+
+INSERT_EVAL_SQL = """
+    INSERT INTO evaluations (
+        id, tenant_id, eval_type, target_model, target_provider,
+        target_endpoint, protocol, agent_name, sample_size, seed,
+        concurrency, status, accuracy, total_scenarios, correct,
+        errors, categories, avg_latency_ms, processing_ms,
+        scenario_results, trace_id, visibility, badges,
+        created_at, started_at, completed_at
+    ) VALUES (
+        $1, $2, $3, $4, $5,
+        $6, $7, $8, $9, $10,
+        $11, $12, $13, $14, $15,
+        $16, $17, $18, $19,
+        $20, $21, $22, $23,
+        $24, $25, $26
     )
-
-
-async def _proxy_to_engine(
-    payload: dict,
-    actor: str,
-    authorization: Optional[str] = None,
-) -> dict:
-    """POST payload to Engine /he300/agentbeats/run and return JSON response.
-
-    In standalone mode, forwards the caller's original Authorization header
-    (AGENTBEATS_API_KEY) so the Engine can validate it.  In managed mode,
-    mints a service JWT.
-    """
-    engine_url = f"{_engine_base_url()}/he300/agentbeats/run"
-
-    if is_standalone() and authorization:
-        auth_header = authorization
-    else:
-        auth_header = f"Bearer {_service_jwt()}"
-
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(600)) as client:
-            resp = await client.post(
-                engine_url,
-                json=payload,
-                headers={
-                    "Authorization": auth_header,
-                    "Content-Type": "application/json",
-                    "X-Tenant-Id": actor,
-                },
-            )
-    except httpx.ConnectError:
-        logger.error("Engine connection refused at %s", engine_url)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Benchmark engine is unavailable. Please try again later.",
-        )
-    except httpx.TimeoutException:
-        logger.error("Engine request timed out at %s", engine_url)
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="Benchmark timed out. Try reducing concurrency or sample size.",
-        )
-
-    if resp.status_code != 200:
-        logger.error("Engine returned %d: %s", resp.status_code, resp.text[:500])
-        raise HTTPException(
-            status_code=resp.status_code,
-            detail="Benchmark engine error. Check server logs for details.",
-        )
-
-    return resp.json()
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -165,18 +150,17 @@ async def run_agentbeats(
     actor: str = Depends(resolve_actor),
     authorization: Optional[str] = Header(None),
 ):
-    """Run HE-300 benchmark — proxied to Engine.
+    """Run HE-300 benchmark locally.
 
     **Managed mode** (ethicsengine.org):
       1. JWT auth enforced via resolve_actor -> validate_a2a_auth
       2. Quota check (Community 1/week, Pro 100/month, Enterprise unlimited)
-      3. Proxy with service JWT
+      3. Execute locally with heuristic classification
 
     **Standalone mode** (AGENTBEATS_MODE=true):
       1. Auth/quota bypassed at Node layer
-      2. Forwards original Authorization header to Engine
-         (Engine validates via ENGINE_API_KEYS / AUTH_ENABLED)
     """
+    # --- 1. Quota check ---
     if not is_standalone():
         try:
             await check_quota(actor)
@@ -186,8 +170,113 @@ async def run_agentbeats(
                 detail=str(exc),
             )
 
-    payload = request.model_dump(mode="json", exclude_none=True)
-    return await _proxy_to_engine(payload, actor, authorization)
+    # --- 2. Parse AgentSpec ---
+    if not request.agent_spec:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="agent_spec is required",
+        )
+
+    try:
+        agent_spec = AgentSpec(**request.agent_spec)
+    except Exception as exc:
+        logger.warning("Invalid agent_spec: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid agent_spec: {exc}",
+        )
+
+    # --- 3. Load scenarios ---
+    seed = request.random_seed if request.random_seed is not None else int(uuid.uuid4().int % 2**31)
+    scenarios = load_scenarios(
+        sample_size=request.sample_size,
+        categories=request.categories,
+        seed=seed,
+    )
+
+    if not scenarios:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No scenarios loaded. Check categories parameter.",
+        )
+
+    # --- 4. Execute batch ---
+    batch_id = f"he300-{uuid.uuid4().hex[:8]}"
+    logger.info(
+        "Starting HE-300 batch %s: %d scenarios, concurrency=%d, protocol=%s, actor=%s",
+        batch_id, len(scenarios), request.concurrency, agent_spec.protocol, actor,
+    )
+
+    batch_result = await run_batch(
+        scenarios=scenarios,
+        agent_spec=agent_spec,
+        batch_id=batch_id,
+        concurrency=request.concurrency,
+        timeout_per_scenario=float(request.timeout_per_scenario),
+    )
+
+    # --- 5. Compute badges ---
+    badges = compute_badges(batch_result.accuracy, batch_result.categories)
+
+    # --- 6. Store in DB ---
+    model_name = _extract_model_name(agent_spec)
+    provider_name = _extract_provider(agent_spec)
+    eval_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+
+    try:
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                INSERT_EVAL_SQL,
+                eval_id,                                # id
+                actor,                                  # tenant_id
+                "client",                               # eval_type
+                model_name,                             # target_model
+                provider_name,                          # target_provider
+                agent_spec.url,                         # target_endpoint
+                agent_spec.protocol,                    # protocol
+                request.agent_name or agent_spec.name,  # agent_name
+                request.sample_size,                    # sample_size
+                seed,                                   # seed
+                request.concurrency,                    # concurrency
+                "completed",                            # status
+                batch_result.accuracy,                  # accuracy
+                batch_result.total,                     # total_scenarios
+                batch_result.correct,                   # correct
+                batch_result.errors,                    # errors
+                json.dumps(batch_result.categories),    # categories (JSONB)
+                batch_result.avg_latency_ms,            # avg_latency_ms
+                int(batch_result.processing_time_ms),   # processing_ms
+                json.dumps(batch_result.results),       # scenario_results (JSONB)
+                batch_id,                               # trace_id
+                "private",                              # visibility
+                json.dumps(badges),                     # badges (JSONB)
+                now,                                    # created_at
+                now,                                    # started_at
+                now,                                    # completed_at
+            )
+        logger.info("Stored evaluation %s (visibility=private)", eval_id)
+    except Exception:
+        logger.exception("Failed to store evaluation %s — returning results anyway", eval_id)
+
+    # --- 7. Return response ---
+    return AgentBeatsRunResponse(
+        batch_id=batch_id,
+        agent_name=request.agent_name or agent_spec.name,
+        model=model_name,
+        accuracy=batch_result.accuracy,
+        total_scenarios=batch_result.total,
+        correct=batch_result.correct,
+        errors=batch_result.errors,
+        categories=batch_result.categories,
+        avg_latency_ms=batch_result.avg_latency_ms,
+        processing_time_ms=batch_result.processing_time_ms,
+        concurrency_used=request.concurrency,
+        protocol=agent_spec.protocol,
+        semantic_evaluation=False,
+        random_seed=seed,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -197,19 +286,11 @@ async def run_agentbeats(
 
 @agentbeats_router.get("/status")
 async def agentbeats_status():
-    """Proxy Engine agentbeats status + add Node-level tier info."""
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as client:
-            resp = await client.get(
-                f"{_engine_base_url()}/he300/agentbeats/status",
-                headers={"Authorization": f"Bearer {_service_jwt()}"},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-            else:
-                data = {"parallel_runner_available": False, "error": resp.text[:200]}
-    except Exception as exc:
-        data = {"parallel_runner_available": False, "error": str(exc)}
+    """Return local runner status."""
+    data: dict[str, Any] = {
+        "parallel_runner_available": True,
+        "engine": "local",
+    }
 
     if is_standalone():
         data["mode"] = "standalone"
