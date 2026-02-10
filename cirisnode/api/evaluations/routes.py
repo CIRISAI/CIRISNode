@@ -1,20 +1,23 @@
 """Auth-required evaluation endpoints.
 
-GET   /api/v1/evaluations       — tenant's own evals + public evals
-GET   /api/v1/evaluations/{id}  — full detail (owner or public)
-PATCH /api/v1/evaluations/{id}  — update visibility/agent_name (owner only)
-GET   /api/v1/usage             — tiered usage meter (Community / Pro / Enterprise)
+GET    /api/v1/evaluations           — tenant's own evals + public evals
+GET    /api/v1/evaluations/{id}      — full detail (owner or public)
+PATCH  /api/v1/evaluations/{id}      — update visibility/agent_name (owner only)
+DELETE /api/v1/evaluations/{id}      — delete evaluation (owner only, not frontier)
+GET    /api/v1/evaluations/{id}/report — signed JSON report (owner or public)
+GET    /api/v1/usage                 — tiered usage meter (Community / Pro / Enterprise)
 """
 
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from cirisnode.api.a2a.auth import validate_a2a_auth
+from cirisnode.utils.signer import sign_data, get_public_key_pem
 from cirisnode.api.agentbeats.quota import get_tenant_tier, get_usage_count, TIERS
 from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.schema.evaluation_schemas import (
@@ -282,3 +285,100 @@ async def patch_evaluation(
         created_at=updated["created_at"],
         completed_at=updated["completed_at"],
     )
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/evaluations/{id} — delete evaluation (owner only)
+# ---------------------------------------------------------------------------
+
+@evaluations_router.delete("/{eval_id}", status_code=204)
+async def delete_evaluation(
+    eval_id: UUID,
+    actor: str = Depends(validate_a2a_auth),
+):
+    """Delete an evaluation. Owner only. Frontier evals cannot be deleted."""
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT tenant_id, eval_type FROM evaluations WHERE id = $1",
+            eval_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Evaluation not found")
+        if row["tenant_id"] != actor:
+            raise HTTPException(status_code=403, detail="Not the owner of this evaluation")
+        if row["eval_type"] == "frontier":
+            raise HTTPException(status_code=403, detail="Frontier evaluations cannot be deleted")
+
+        await conn.execute("DELETE FROM evaluations WHERE id = $1", eval_id)
+
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/evaluations/{id}/report — signed JSON report
+# ---------------------------------------------------------------------------
+
+@evaluations_router.get("/{eval_id}/report")
+async def get_evaluation_report(
+    eval_id: UUID,
+    actor: str = Depends(validate_a2a_auth),
+):
+    """Return a signed JSON report for an evaluation.
+
+    The summary dict is Ed25519-signed so third parties can verify
+    the evaluation results came from this CIRISNode instance.
+    """
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(DETAIL_SQL, eval_id)
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+
+    if row["tenant_id"] != actor and row["visibility"] != "public":
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+
+    categories = row["categories"]
+    if isinstance(categories, str):
+        categories = json.loads(categories)
+
+    badges = row["badges"]
+    if isinstance(badges, str):
+        badges = json.loads(badges)
+
+    scenario_results = row["scenario_results"]
+    if isinstance(scenario_results, str):
+        scenario_results = json.loads(scenario_results)
+
+    now = datetime.now(timezone.utc)
+
+    summary: dict[str, Any] = {
+        "agent_name": row["agent_name"],
+        "target_model": row["target_model"],
+        "target_provider": row["target_provider"],
+        "protocol": row["protocol"],
+        "accuracy": row["accuracy"],
+        "total_scenarios": row["total_scenarios"],
+        "correct": row["correct"],
+        "errors": row["errors"],
+        "avg_latency_ms": row["avg_latency_ms"],
+        "processing_ms": row["processing_ms"],
+        "sample_size": row["sample_size"],
+        "seed": row["seed"],
+        "badges": badges or [],
+        "categories": categories,
+    }
+
+    signature = sign_data(summary).hex()
+    public_key = get_public_key_pem()
+
+    return {
+        "report_version": "1.0",
+        "evaluation_id": str(row["id"]),
+        "generated_at": now.isoformat(),
+        "summary": summary,
+        "scenario_results": scenario_results,
+        "signature": signature,
+        "public_key": public_key,
+    }

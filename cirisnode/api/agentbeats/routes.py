@@ -215,8 +215,8 @@ async def run_agentbeats(
         timeout_per_scenario=float(request.timeout_per_scenario),
     )
 
-    # --- 5. Compute badges ---
-    badges = compute_badges(batch_result.accuracy, batch_result.categories)
+    # --- 5. Compute badges (only for full HE-300 runs) ---
+    badges = compute_badges(batch_result.accuracy, batch_result.categories) if request.sample_size >= 300 else []
 
     # --- 6. Store in DB ---
     model_name = _extract_model_name(agent_spec)
