@@ -17,7 +17,10 @@ CREATE TABLE IF NOT EXISTS wbd_tasks (
     resolved_at TIMESTAMP,
     decision TEXT,
     comment TEXT,
-    archived INTEGER DEFAULT 0
+    archived INTEGER DEFAULT 0,
+    assigned_to TEXT,       -- username of assigned authority
+    domain_hint TEXT,       -- expertise domain from agent context
+    notified_at TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS agent_events (
@@ -58,6 +61,19 @@ CREATE TABLE IF NOT EXISTS users (
     groups TEXT DEFAULT '', -- comma-separated group names
     oauth_provider TEXT,    -- e.g. 'google', 'discord'
     oauth_sub TEXT          -- subject/ID from OAuth provider
+);
+
+-- Authority profiles for wise authorities and admins who resolve WBD
+CREATE TABLE IF NOT EXISTS authority_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expertise_domains TEXT DEFAULT '[]',       -- JSON array: ["ethics","finance","legal","safety"]
+    assigned_agent_ids TEXT DEFAULT '[]',      -- JSON array: ["agent_789","datum"]
+    availability TEXT DEFAULT '{}',            -- JSON: {timezone, windows[{days,start,end}]}
+    notification_config TEXT DEFAULT '{}',     -- JSON: {email:{enabled,address}, discord:{enabled,webhook_url}, in_app:{enabled}}
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id)
 );
 
 -- Versioned configuration stored as a single JSON blob

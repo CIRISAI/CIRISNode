@@ -1,154 +1,217 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { useSession, signIn, signOut } from "next-auth/react";
-import AuditLogs from "../components/AuditLogs";
-import DiscordTab from "../components/DiscordTab";
-import WiseAuthorityTab from "../components/WiseAuthorityTab";
-import AdminTab from "../components/AdminTab";
-import Head from "next/head";
-import Link from "next/link";
+import { useEffect, useState, useCallback } from "react";
+import { apiFetch } from "../lib/api";
 
-export default function Home() {
-  const { data: session } = useSession();
-  const [role, setRole] = useState<string | null>(null);
-  const [groups, setGroups] = useState<string[]>([]);
+interface TrendInfo {
+  prev_accuracy: number;
+  delta: number;
+  direction: "up" | "down" | "stable";
+}
+
+interface ScoreEntry {
+  model_id: string;
+  display_name: string;
+  provider: string;
+  accuracy: number | null;
+  total_scenarios: number;
+  categories: Record<string, { correct: number; total: number; accuracy: number }> | null;
+  badges: string[];
+  avg_latency_ms: number | null;
+  completed_at: string | null;
+  trend: TrendInfo | null;
+}
+
+interface LeaderboardEntry {
+  rank: number;
+  agent_name: string;
+  target_model: string;
+  accuracy: number | null;
+  badges: string[];
+  completed_at: string | null;
+}
+
+export default function ScoresPage() {
+  const [scores, setScores] = useState<ScoreEntry[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedModel, setExpandedModel] = useState<string | null>(null);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [scoresRes, lbRes] = await Promise.all([
+        apiFetch<{ scores: ScoreEntry[] }>("/api/v1/scores"),
+        apiFetch<{ entries: LeaderboardEntry[] }>("/api/v1/leaderboard"),
+      ]);
+      setScores(scoresRes.scores || []);
+      setLeaderboard(lbRes.entries || []);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load scores");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (!session) {
-      setRole(null);
-      setGroups([]);
-      return;
-    }
-    const email = session?.user?.email;
-    if (!email) return;
-    const fetchUserInfo = async () => {
-      try {
-        const res = await fetch(
-          "/api/auth/me",
-          {
-            headers: {
-              "x-user-email": email,
-            },
-          }
-        );
-        if (res.ok) {
-          const me = await res.json();
-          setRole(me.role);
-          setGroups((me.groups || "").split(",").map((g: string) => g.trim()).filter(Boolean));
-        } else {
-          setRole(null);
-          setGroups([]);
-        }
-      } catch {
-        setRole(null);
-        setGroups([]);
-      }
-    };
-    fetchUserInfo();
-  }, [session]);
+    fetchData();
+    const interval = setInterval(fetchData, 60000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
+  const trendArrow = (trend: TrendInfo | null) => {
+    if (!trend) return null;
+    if (trend.direction === "up") return <span className="text-green-600">+{(trend.delta * 100).toFixed(1)}%</span>;
+    if (trend.direction === "down") return <span className="text-red-600">{(trend.delta * 100).toFixed(1)}%</span>;
+    return <span className="text-gray-400">-</span>;
+  };
+
+  if (loading) {
+    return <div className="text-center py-12 text-gray-500">Loading scores...</div>;
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+        {error}
+      </div>
+    );
+  }
 
   return (
-    <>
-      <Head>
-        <title>CIRIS NODE0</title>
-      </Head>
-      <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center">
-        <header className="bg-white shadow w-full">
-          <div className="max-w-3xl mx-auto py-8 px-4 sm:px-6 lg:px-8 text-center">
-            <h1 className="text-4xl font-extrabold text-gray-900 mb-2">
-              Welcome to the CIRIS.AI Alignment and Human Oversight Server
-            </h1>
-            <p className="text-lg text-gray-700 mb-4">
-              Visit{" "}
-              <a
-                href="https://ciris.ai"
-                className="text-blue-600 underline hover:text-blue-800"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                ciris.ai
-              </a>{" "}
-              for more information.
-            </p>
-            {/* --- TOP NAVIGATION TABS --- */}
-            <nav className="flex flex-wrap justify-center gap-2 mb-4 border-b border-gray-200 pb-2">
-              <Link href="/" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Home</Link>
-              <Link href="/he300" className="px-4 py-2 rounded-t bg-indigo-600 hover:bg-indigo-700 text-white font-semibold">⚖️ HE-300 Benchmark</Link>
-              <Link href="#audit" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Audit Logs</Link>
-              <Link href="#admin" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Admin</Link>
-              <Link href="#wise" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Wise Authority</Link>
-              <Link href="#discord" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Discord</Link>
-              <Link href="#test" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Test Connection</Link>
-              <Link href="#bench" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Bench</Link>
-              <Link href="#health" className="px-4 py-2 rounded-t bg-gray-100 hover:bg-indigo-100 text-indigo-700 font-semibold">Health</Link>
-            </nav>
-            {/* --- END NAVIGATION --- */}
-            <div className="flex flex-col sm:flex-row justify-center gap-4 mb-4">
-              <button
-                onClick={() => signIn("discord")}
-                className="inline-flex items-center px-6 py-3 bg-indigo-600 text-white text-lg font-semibold rounded-lg shadow hover:bg-indigo-700 transition"
-              >
-                <svg
-                  className="w-6 h-6 mr-2"
-                  fill="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path d="M20.317 4.369a19.791 19.791 0 00-4.885-1.515.07.07 0 00-.073.035c-.211.375-.444.864-.608 1.249-1.844-.276-3.68-.276-5.486 0-.164-.393-.405-.874-.617-1.249a.07.07 0 00-.073-.035 19.736 19.736 0 00-4.885 1.515.064.064 0 00-.03.027C.533 9.045-.32 13.579.099 18.057a.08.08 0 00.031.056c2.052 1.507 4.042 2.422 5.992 3.029a.077.077 0 00.084-.027c.461-.63.873-1.295 1.226-1.994a.076.076 0 00-.041-.104c-.652-.247-1.27-.549-1.872-.892a.077.077 0 01-.008-.127c.126-.094.252-.192.372-.291a.074.074 0 01.077-.01c3.927 1.793 8.18 1.793 12.061 0a.073.073 0 01.078.009c.12.099.246.197.372.291a.077.077 0 01-.006.127 12.298 12.298 0 01-1.873.892.076.076 0 00-.04.105c.36.699.772 1.364 1.225 1.994a.076.076 0 00.084.028c1.95-.607 3.94-1.522 5.992-3.029a.077.077 0 00.031-.055c.5-5.177-.838-9.673-3.548-13.661a.061.061 0 00-.03-.028zM8.02 15.331c-1.183 0-2.156-1.085-2.156-2.419 0-1.333.955-2.418 2.156-2.418 1.21 0 2.175 1.094 2.156 2.418 0 1.334-.955 2.419-2.156 2.419zm7.974 0c-1.183 0-2.156-1.085-2.156-2.419 0-1.333.955-2.418 2.156-2.418 1.21 0 2.175 1.094 2.156 2.418 0 1.334-.946 2.419-2.156 2.419z" />
-                </svg>
-                Login with Discord
-              </button>
-              <button
-                onClick={() => signIn("google")}
-                className="inline-flex items-center px-6 py-3 bg-red-600 text-white text-lg font-semibold rounded-lg shadow hover:bg-red-700 transition"
-              >
-                <svg className="w-6 h-6 mr-2" viewBox="0 0 48 48">
-                  <g>
-                    <path fill="#4285F4" d="M24 9.5c3.54 0 6.44 1.22 8.41 3.22l6.24-6.24C34.64 2.61 29.8 0 24 0 14.82 0 6.88 5.82 2.69 14.09l7.25 5.63C12.01 13.09 17.55 9.5 24 9.5z"/>
-                    <path fill="#34A853" d="M46.1 24.55c0-1.64-.15-3.21-.42-4.73H24v9.18h12.42c-.54 2.91-2.18 5.38-4.66 7.04l7.25 5.63C43.98 37.13 46.1 31.3 46.1 24.55z"/>
-                    <path fill="#FBBC05" d="M10.94 28.72A14.5 14.5 0 019.5 24c0-1.64.28-3.22.78-4.72l-7.25-5.63A23.94 23.94 0 000 24c0 3.77.9 7.34 2.5 10.45l8.44-6.73z"/>
-                    <path fill="#EA4335" d="M24 46c6.48 0 11.92-2.15 15.89-5.85l-7.25-5.63c-2.01 1.35-4.6 2.16-8.64 2.16-6.45 0-11.99-3.59-14.06-8.72l-8.44 6.73C6.88 42.18 14.82 48 24 48z"/>
-                    <path fill="none" d="M0 0h48v48H0z"/>
-                  </g>
-                </svg>
-                Login with Google
-              </button>
-              {session && (
-                <button
-                  onClick={() => signOut()}
-                  className="inline-flex items-center px-6 py-3 bg-gray-300 text-gray-800 text-lg font-semibold rounded-lg shadow hover:bg-gray-400 transition"
-                >
-                  Logout
-                </button>
-              )}
-            </div>
+    <div className="space-y-8">
+      {/* Frontier Scores */}
+      <section>
+        <h2 className="text-xl font-bold text-gray-900 mb-4">Frontier Model Scores</h2>
+        {scores.length === 0 ? (
+          <p className="text-gray-500">No frontier scores available yet.</p>
+        ) : (
+          <div className="bg-white shadow rounded-lg overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Rank</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Model</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Provider</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Accuracy</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Scenarios</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Badges</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Trend</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Evaluated</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {scores.map((s, idx) => (
+                  <>
+                    <tr
+                      key={s.model_id}
+                      className="hover:bg-gray-50 cursor-pointer"
+                      onClick={() =>
+                        setExpandedModel(expandedModel === s.model_id ? null : s.model_id)
+                      }
+                    >
+                      <td className="px-4 py-3 text-sm font-medium text-gray-900">{idx + 1}</td>
+                      <td className="px-4 py-3 text-sm font-medium text-gray-900">{s.display_name}</td>
+                      <td className="px-4 py-3 text-sm text-gray-500">{s.provider}</td>
+                      <td className="px-4 py-3 text-sm text-right font-mono">
+                        {s.accuracy != null ? `${(s.accuracy * 100).toFixed(1)}%` : "-"}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-right">{s.total_scenarios}</td>
+                      <td className="px-4 py-3 text-sm">
+                        <div className="flex gap-1 flex-wrap">
+                          {s.badges.map((b) => (
+                            <span
+                              key={b}
+                              className="inline-block bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded"
+                            >
+                              {b}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-right">{trendArrow(s.trend)}</td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {s.completed_at ? new Date(s.completed_at).toLocaleDateString() : "-"}
+                      </td>
+                    </tr>
+                    {expandedModel === s.model_id && s.categories && (
+                      <tr key={`${s.model_id}-detail`}>
+                        <td colSpan={8} className="px-4 py-3 bg-gray-50">
+                          <div className="text-sm font-medium text-gray-700 mb-2">Category Breakdown</div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            {Object.entries(s.categories).map(([cat, data]) => (
+                              <div key={cat} className="bg-white p-2 rounded border">
+                                <div className="text-xs text-gray-500 capitalize">{cat}</div>
+                                <div className="text-sm font-mono">
+                                  {(data.accuracy * 100).toFixed(1)}%
+                                  <span className="text-gray-400 text-xs ml-1">
+                                    ({data.correct}/{data.total})
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </header>
-        <main className="w-full">
-          <div className="max-w-4xl mx-auto py-6 sm:px-6 lg:px-8">
-            {/* Debug Panel: Show session and user info */}
-            <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded text-yellow-900">
-              <h3 className="font-bold mb-2">Debug: Session & User Info</h3>
-              <pre className="text-xs overflow-x-auto bg-yellow-100 p-2 rounded">
-{JSON.stringify({ session, role, groups }, null, 2)}
-              </pre>
-              {!session && <div className="text-red-600">Not logged in (anonymous)</div>}
-              {session && !role && (
-                <div className="text-orange-600">Logged in, but no role/group assigned. Contact admin to be added to a group/role.</div>
-              )}
-            </div>
-            <div className="px-4 py-6 sm:px-0 space-y-8">
-              <div id="audit"><AuditLogs /></div>
-              <div id="admin"><AdminTab /></div>
-              <div id="wise"><WiseAuthorityTab /></div>
-              <div id="discord"><DiscordTab /></div>
-              <div id="test">{/* TODO: import and render TestConnection component here */}</div>
-              <div id="bench">{/* TODO: import and render Bench/SimpleBenchRunner component here */}</div>
-              <div id="health">{/* TODO: import and render HealthStatus component here */}</div>
-            </div>
+        )}
+      </section>
+
+      {/* Client Leaderboard */}
+      <section>
+        <h2 className="text-xl font-bold text-gray-900 mb-4">Client Leaderboard</h2>
+        {leaderboard.length === 0 ? (
+          <p className="text-gray-500">No client evaluations yet.</p>
+        ) : (
+          <div className="bg-white shadow rounded-lg overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Rank</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Agent Name</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Model</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Accuracy</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Badges</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {leaderboard.map((e) => (
+                  <tr key={`${e.rank}-${e.agent_name}`} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">{e.rank}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900">{e.agent_name || "-"}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500">{e.target_model}</td>
+                    <td className="px-4 py-3 text-sm text-right font-mono">
+                      {e.accuracy != null ? `${(e.accuracy * 100).toFixed(1)}%` : "-"}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      <div className="flex gap-1 flex-wrap">
+                        {e.badges.map((b) => (
+                          <span
+                            key={b}
+                            className="inline-block bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded"
+                          >
+                            {b}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-500">
+                      {e.completed_at ? new Date(e.completed_at).toLocaleDateString() : "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </main>
-      </div>
-    </>
+        )}
+      </section>
+    </div>
   );
 }

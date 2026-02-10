@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException, status, Depends, Form, Header, Request
+from fastapi import APIRouter, HTTPException, status, Depends, Form, Header, Request, Query
 from cirisnode.database import get_db
 from pydantic import BaseModel
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 import jwt
 from cirisnode.utils.rbac import require_role
 import hashlib
@@ -11,6 +11,7 @@ import json
 SECRET_KEY = "testsecret"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ALLOWED_ADMIN_DOMAIN = "ciris.ai"
 
 auth_router = APIRouter()
 
@@ -41,6 +42,12 @@ class GroupUpdateRequest(BaseModel):
 class OAuthUpdateRequest(BaseModel):
     oauth_provider: str
     oauth_sub: str
+
+class InviteRequest(BaseModel):
+    email: str
+    role: str = "wise_authority"
+    expertise_domains: Optional[List[str]] = None
+    assigned_agent_ids: Optional[List[str]] = None
 
 
 @auth_router.post("/auth/token", response_model=Token)
@@ -216,3 +223,85 @@ def get_actor_from_token(Authorization: str) -> str:
         return payload.get("sub", "unknown")
     except Exception:
         return "unknown"
+
+
+@auth_router.get("/api/v1/auth/check-access")
+def check_access(email: str = Query(...), db=Depends(get_db)):
+    """Check if an email is allowed to access the admin UI and return their role.
+    Called by NextAuth signIn + jwt callbacks. Unauthenticated endpoint."""
+    conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
+    email_lower = email.lower().strip()
+
+    # @ciris.ai → auto-create as admin if not in users table
+    if email_lower.endswith(f"@{ALLOWED_ADMIN_DOMAIN}"):
+        user = conn.execute(
+            "SELECT id, username, role FROM users WHERE username = ?", (email_lower,)
+        ).fetchone()
+        if not user:
+            conn.execute(
+                "INSERT INTO users (username, password, role) VALUES (?, '', 'admin')",
+                (email_lower,),
+            )
+            conn.commit()
+            return {"allowed": True, "role": "admin", "email": email_lower}
+        return {"allowed": True, "role": user[2], "email": email_lower}
+
+    # Non-ciris.ai email → must exist in users table with non-anonymous role
+    user = conn.execute(
+        "SELECT id, username, role FROM users WHERE username = ?", (email_lower,)
+    ).fetchone()
+    if user and user[2] not in ("anonymous",):
+        return {"allowed": True, "role": user[2], "email": email_lower}
+
+    return {"allowed": False, "role": "anonymous", "email": email_lower}
+
+
+@auth_router.post("/api/v1/admin/users/invite", dependencies=[Depends(require_role(["admin"]))])
+def invite_user(req: InviteRequest, Authorization: str = Header(...), db=Depends(get_db)):
+    """Invite an external user as a wise authority (or admin). Admin-only."""
+    conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
+    email_lower = req.email.lower().strip()
+
+    # Check if user already exists
+    existing = conn.execute(
+        "SELECT id, username, role FROM users WHERE username = ?", (email_lower,)
+    ).fetchone()
+    if existing:
+        raise HTTPException(status_code=409, detail="User already exists")
+
+    valid_roles = ("wise_authority", "admin")
+    role = req.role if req.role in valid_roles else "wise_authority"
+
+    # Create user
+    cursor = conn.execute(
+        "INSERT INTO users (username, password, role) VALUES (?, '', ?)",
+        (email_lower, role),
+    )
+    conn.commit()
+    user_id = cursor.lastrowid
+
+    # Create authority profile
+    expertise = json.dumps(req.expertise_domains or [])
+    agents = json.dumps(req.assigned_agent_ids or [])
+    conn.execute(
+        "INSERT INTO authority_profiles (user_id, expertise_domains, assigned_agent_ids) VALUES (?, ?, ?)",
+        (user_id, expertise, agents),
+    )
+    conn.commit()
+
+    # Audit log
+    actor = get_actor_from_token(Authorization)
+    payload = json.dumps({"email": email_lower, "role": role})
+    payload_sha256 = hashlib.sha256(payload.encode()).hexdigest()
+    conn.execute(
+        "INSERT INTO audit_logs (actor, event_type, payload_sha256, details) VALUES (?, ?, ?, ?)",
+        (actor, "user_invite", payload_sha256, payload),
+    )
+    conn.commit()
+
+    return {
+        "status": "invited",
+        "email": email_lower,
+        "role": role,
+        "user_id": user_id,
+    }

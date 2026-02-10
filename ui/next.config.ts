@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   },
   env: {
     NEXT_PUBLIC_API_URL:
-      process.env.NEXT_PUBLIC_API_URL || "https://ethicsengine.ciris.ai",
+      process.env.NEXT_PUBLIC_API_URL || "https://node.ciris.ai",
   },
   // In Docker (dev), proxy /api/v1/* to the backend container.
   // In Cloudflare Workers, the frontend calls NEXT_PUBLIC_API_URL directly.

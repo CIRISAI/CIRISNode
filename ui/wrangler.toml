@@ -29,7 +29,7 @@ AUTH_URL = "https://admin.ethicsengine.org"
 NEXTAUTH_URL = "https://admin.ethicsengine.org"
 AUTH_TRUST_HOST = "true"
 GOOGLE_CLIENT_ID = "1003497422667-nk3s1jki6clshnvfil4r575cdlr7rnte.apps.googleusercontent.com"
-NEXT_PUBLIC_API_URL = "https://ethicsengine.ciris.ai"
+NEXT_PUBLIC_API_URL = "https://node.ciris.ai"
 ALLOWED_EMAIL_DOMAIN = "ciris.ai"
 
 # Secrets — set via Cloudflare dashboard or wrangler CLI:

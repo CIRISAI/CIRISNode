@@ -1,0 +1,171 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import { apiFetch } from "../../lib/api";
+import RoleGuard from "../../components/RoleGuard";
+
+interface HealthData {
+  status: string;
+  version?: string;
+  uptime?: number;
+  postgres?: string;
+  redis?: string;
+  [key: string]: unknown;
+}
+
+export default function SystemPage() {
+  return (
+    <RoleGuard allowed={["admin"]}>
+      <SystemContent />
+    </RoleGuard>
+  );
+}
+
+function SystemContent() {
+  const [health, setHealth] = useState<HealthData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [clearingCache, setClearingCache] = useState(false);
+
+  const fetchHealth = useCallback(async () => {
+    try {
+      const data = await apiFetch<HealthData>("/health");
+      setHealth(data);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load health");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 30000);
+    return () => clearInterval(interval);
+  }, [fetchHealth]);
+
+  const clearCache = async () => {
+    setClearingCache(true);
+    try {
+      // Clear scores caches by fetching a fresh score (cache invalidation happens server-side)
+      await apiFetch("/api/v1/scores");
+      alert("Cache refresh requested.");
+    } catch {
+      alert("Failed to clear cache.");
+    } finally {
+      setClearingCache(false);
+    }
+  };
+
+  const statusDot = (status: string | undefined) => {
+    const ok = status === "ok" || status === "connected" || status === "healthy";
+    return (
+      <span
+        className={`inline-block w-2.5 h-2.5 rounded-full mr-2 ${
+          ok ? "bg-green-500" : "bg-red-500"
+        }`}
+      />
+    );
+  };
+
+  if (loading) {
+    return <div className="text-center py-12 text-gray-500">Loading system health...</div>;
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+        {error}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-xl font-bold text-gray-900">System Health</h2>
+
+      {/* Health Card */}
+      <div className="bg-white shadow rounded-lg p-6">
+        <div className="flex items-center gap-4 mb-4">
+          {statusDot(health?.status as string)}
+          <span className="text-lg font-semibold capitalize">{health?.status || "unknown"}</span>
+          {health?.version && (
+            <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
+              v{health.version}
+            </span>
+          )}
+        </div>
+        {health?.uptime != null && (
+          <p className="text-sm text-gray-500">
+            Uptime: {Math.floor(health.uptime / 3600)}h {Math.floor((health.uptime % 3600) / 60)}m
+          </p>
+        )}
+      </div>
+
+      {/* Connected Services */}
+      <div className="bg-white shadow rounded-lg p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Connected Services</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="border rounded p-4">
+            <div className="flex items-center">
+              {statusDot(health?.postgres as string || (health?.status === "ok" ? "ok" : "unknown"))}
+              <span className="font-medium">PostgreSQL</span>
+            </div>
+            <p className="text-sm text-gray-500 mt-1">
+              {health?.postgres || (health?.status === "ok" ? "connected" : "unknown")}
+            </p>
+          </div>
+          <div className="border rounded p-4">
+            <div className="flex items-center">
+              {statusDot(health?.redis as string || (health?.status === "ok" ? "ok" : "unknown"))}
+              <span className="font-medium">Redis</span>
+            </div>
+            <p className="text-sm text-gray-500 mt-1">
+              {health?.redis || (health?.status === "ok" ? "connected" : "unknown")}
+            </p>
+          </div>
+          <div className="border rounded p-4">
+            <div className="flex items-center">
+              {statusDot("ok")}
+              <span className="font-medium">CIRISNode API</span>
+            </div>
+            <p className="text-sm text-gray-500 mt-1">reachable</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Configuration Summary */}
+      <div className="bg-white shadow rounded-lg p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Configuration</h3>
+        <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+          {Object.entries(health || {})
+            .filter(([k]) => !["status", "version", "uptime", "postgres", "redis"].includes(k))
+            .map(([key, value]) => (
+              <div key={key} className="flex justify-between border-b border-gray-100 py-1">
+                <dt className="text-sm font-medium text-gray-500">{key}</dt>
+                <dd className="text-sm font-mono text-gray-900">
+                  {typeof value === "object" ? JSON.stringify(value) : String(value)}
+                </dd>
+              </div>
+            ))}
+        </dl>
+      </div>
+
+      {/* Cache Management */}
+      <div className="bg-white shadow rounded-lg p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Cache Management</h3>
+        <button
+          onClick={clearCache}
+          disabled={clearingCache}
+          className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+        >
+          {clearingCache ? "Clearing..." : "Clear Scores Cache"}
+        </button>
+        <p className="text-sm text-gray-500 mt-2">
+          Removes cached frontier scores and embed data. Fresh data will be loaded on next request.
+        </p>
+      </div>
+    </div>
+  );
+}

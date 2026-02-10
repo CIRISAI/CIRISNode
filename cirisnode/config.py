@@ -34,6 +34,18 @@ class Settings(BaseSettings):
     EEE_RETRY_DELAY: float = 1.0  # Base delay between retries (seconds)
     HE300_CACHE_TTL: int = 3600  # Cache scenario data for 1 hour (seconds)
 
+    # --- Frontier Sweep ---
+    # JSON dict mapping provider name (lowercase) to API key:
+    # e.g. '{"openai":"sk-proj-...","anthropic":"sk-ant-...","google":"AIza..."}'
+    FRONTIER_API_KEYS: str = "{}"
+
+    # --- SMTP (authority notifications) ---
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASS: str = ""
+    SMTP_FROM: str = "noreply@ciris.ai"
+
     # --- Portal API (billing/gating delegation) ---
     PORTAL_API_URL: str = "https://api.portal.ethicsengine.org"  # Portal API for standing checks
 

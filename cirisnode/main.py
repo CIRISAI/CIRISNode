@@ -20,6 +20,8 @@ from cirisnode.api.agentbeats.routes import agentbeats_router
 from cirisnode.api.agentbeats.profiles import profiles_router
 from cirisnode.api.billing.routes import billing_router
 from cirisnode.api.admin.routes import admin_router
+from cirisnode.api.admin.frontier_routes import frontier_router
+from cirisnode.api.admin.authority_routes import authority_router
 from cirisnode.mcp.transport import mcp_app
 import os
 
@@ -118,6 +120,8 @@ app.include_router(billing_router)     # /api/v1/billing/checkout, /portal, /web
 
 # Admin — tenant tier management (requires admin JWT)
 app.include_router(admin_router)       # /api/v1/admin/tenants/{id}/tier
+app.include_router(frontier_router)    # /api/v1/admin/frontier-models, /frontier-sweep
+app.include_router(authority_router)   # /api/v1/admin/authorities CRUD
 
 # MCP Server (mounted as sub-application)
 app.mount("/mcp", mcp_app)              # /mcp/sse, /mcp/messages/
