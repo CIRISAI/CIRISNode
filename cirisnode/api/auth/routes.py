@@ -26,7 +26,7 @@ class TokenData(BaseModel):
 
 
 class UserOut(BaseModel):
-    id: int
+    id: Optional[int] = None
     username: str
     role: str
     groups: str = ''
