@@ -25,9 +25,6 @@ class Settings(BaseSettings):
     # unset/"" = managed node (ethicsengine.org — JWT auth + quota enforced)
     AGENTBEATS_MODE: str = ""
 
-    # --- Stripe Integration (direct — replaces EEE proxy) ---
-    STRIPE_API_KEY: str = ""  # Stripe secret key (sk_live_... or sk_test_...)
-
     # --- EthicsEngine Enterprise Integration Settings ---
     EEE_ENABLED: bool = False  # Feature flag - disabled by default for fork safety
     EEE_BASE_URL: str = "http://localhost:8080"  # EthicsEngine Enterprise API URL

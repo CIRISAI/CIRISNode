@@ -1,14 +1,15 @@
 """Tiered usage quota enforcement.
 
-Subscription tiers (Stripe-backed):
+Subscription tiers:
   - community (free):   1 eval / week    (resets Monday 00:00 UTC)
   - pro ($399/mo):     100 evals / month  (resets 1st of month 00:00 UTC)
   - enterprise:        unlimited
 
 Tier resolution:
-  The ``tenant_tier`` table in PostgreSQL stores the current tier per tenant.
+  The ``tenant_tiers`` table in PostgreSQL stores the current tier per tenant.
   If a row doesn't exist the tenant is assumed to be community (free).
-  Stripe webhooks write to this table when subscriptions change.
+  Portal API writes to this table via CIRISNode admin endpoints when
+  subscriptions change in Stripe.
 """
 
 import logging
@@ -116,25 +117,22 @@ async def get_usage_count(actor: str, tier: str) -> tuple[int, int | None, datet
 
 async def check_quota(actor: str) -> None:
     """Raise ``QuotaDenied`` if the actor has exhausted their quota."""
-    # Ensure actor has a Stripe customer record + tenant_tiers row
-    try:
-        from cirisnode.services.stripe_sync import ensure_stripe_customer
-        await ensure_stripe_customer(actor)
-    except Exception as exc:
-        logger.warning("Stripe sync failed (non-fatal): %s", exc)
-
     tier = await get_tenant_tier(actor)
     count, limit, reset = await get_usage_count(actor, tier)
 
     if limit is not None and count >= limit:
         tier_label = tier.capitalize()
         window = "month" if TIERS[tier]["window"] == "month" else "week"
+        logger.warning(
+            "quota_denied",
+            extra={"actor": actor, "tier": tier, "usage": count, "limit": limit},
+        )
         raise QuotaDenied(
             f"{tier_label} plan limit reached: {count}/{limit} evaluations this {window}. "
             f"Resets {reset.isoformat()}. Upgrade at https://ethicsengine.org/pricing"
         )
 
     logger.info(
-        "Quota check passed for %s (tier=%s, usage=%d/%s, resets=%s)",
-        actor, tier, count, limit, reset.isoformat(),
+        "quota_check_passed",
+        extra={"actor": actor, "tier": tier, "usage": count, "limit": limit, "resets": reset.isoformat()},
     )

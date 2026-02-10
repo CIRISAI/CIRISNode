@@ -1,10 +1,9 @@
 """Admin endpoints for tenant management.
 
-PUT  /api/v1/admin/tenants/{tenant_id}/tier  — set tier override + sync Stripe metadata
+PUT  /api/v1/admin/tenants/{tenant_id}/tier  — set tier override (DB only)
 GET  /api/v1/admin/tenants/{tenant_id}       — get tenant info
 """
 
-import asyncio
 import logging
 from typing import Optional
 
@@ -13,7 +12,6 @@ from pydantic import BaseModel
 
 from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.utils.rbac import require_role
-from cirisnode.services.stripe_sync import ensure_stripe_customer, _init_stripe
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +24,12 @@ admin_router = APIRouter(
 VALID_TIERS = {"community", "pro", "enterprise"}
 
 UPSERT_TIER_SQL = """
-    INSERT INTO tenant_tiers (tenant_id, tier, stripe_customer_id, updated_at)
-    VALUES ($1, $2, $3, now())
+    INSERT INTO tenant_tiers (tenant_id, tier, updated_at)
+    VALUES ($1, $2, now())
     ON CONFLICT (tenant_id)
     DO UPDATE SET tier = EXCLUDED.tier,
-                  stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, tenant_tiers.stripe_customer_id),
                   updated_at = now()
-    RETURNING tier, stripe_customer_id
+    RETURNING tier
 """
 
 GET_TIER_SQL = """
@@ -61,8 +58,10 @@ async def get_tenant(tenant_id: str):
         row = await conn.fetchrow(GET_TIER_SQL, tenant_id)
 
     if not row:
+        logger.info("tenant_tier_read", extra={"tenant_id": tenant_id, "tier": "community", "found": False})
         return TenantTierResponse(tenant_id=tenant_id, tier="community")
 
+    logger.info("tenant_tier_read", extra={"tenant_id": tenant_id, "tier": row["tier"], "found": True})
     return TenantTierResponse(
         tenant_id=row["tenant_id"],
         tier=row["tier"],
@@ -76,8 +75,8 @@ async def get_tenant(tenant_id: str):
 async def set_tenant_tier(tenant_id: str, body: SetTierRequest):
     """Set tier override for a tenant.
 
-    Updates the ``tenant_tiers`` table and syncs the tier to Stripe
-    customer metadata (if Stripe is configured).
+    Updates the ``tenant_tiers`` table (DB only — no Stripe calls).
+    Stripe is managed exclusively by Portal API.
     """
     if body.tier not in VALID_TIERS:
         raise HTTPException(
@@ -85,38 +84,24 @@ async def set_tenant_tier(tenant_id: str, body: SetTierRequest):
             detail=f"tier must be one of: {', '.join(sorted(VALID_TIERS))}",
         )
 
-    # Ensure Stripe customer exists (creates if needed)
-    stripe_id = None
-    try:
-        stripe_id = await ensure_stripe_customer(tenant_id)
-    except Exception as exc:
-        logger.warning("Stripe customer sync failed: %s", exc)
-
-    # Upsert tier
+    # Read existing tier for logging
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(UPSERT_TIER_SQL, tenant_id, body.tier, stripe_id)
+        existing = await conn.fetchval(
+            "SELECT tier FROM tenant_tiers WHERE tenant_id = $1", tenant_id
+        )
 
-    # Sync tier to Stripe metadata
-    final_stripe_id = row["stripe_customer_id"] if row else stripe_id
-    if final_stripe_id and _init_stripe():
-        try:
-            import stripe
-            await asyncio.to_thread(
-                stripe.Customer.modify,
-                final_stripe_id,
-                metadata={"tier": body.tier},
-            )
-            logger.info(
-                "Stripe metadata synced: %s -> tier=%s", final_stripe_id, body.tier
-            )
-        except Exception as exc:
-            logger.warning("Stripe metadata sync failed: %s", exc)
+    # Upsert tier
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(UPSERT_TIER_SQL, tenant_id, body.tier)
 
-    logger.info("tenant_tier_set: %s -> %s", tenant_id, body.tier)
+    previous_tier = existing or "community"
+    logger.info(
+        "tenant_tier_set",
+        extra={"tenant_id": tenant_id, "tier": body.tier, "previous_tier": previous_tier},
+    )
 
     return TenantTierResponse(
         tenant_id=tenant_id,
         tier=body.tier,
-        stripe_customer_id=final_stripe_id,
     )
