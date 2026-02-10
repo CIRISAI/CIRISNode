@@ -1,18 +1,21 @@
 import NextAuth from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import { SignJWT } from "jose";
+import { getEnv } from "../../../../lib/env";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://node.ciris.ai";
-// JWT_SECRET must match CIRISNode's JWT_SECRET (cirisnode_jwt_secret), separate from NEXTAUTH_SECRET
-const CIRISNODE_JWT_KEY = new TextEncoder().encode(
-  process.env.JWT_SECRET || "testsecret"
-);
+
+/** Lazily resolve the CIRISNode JWT signing key (secrets may not be in process.env on CF Workers) */
+function getCirisNodeKey() {
+  const secret = getEnv("JWT_SECRET") || "testsecret";
+  return new TextEncoder().encode(secret);
+}
 
 const handler = NextAuth({
   providers: [
     GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      clientId: getEnv("GOOGLE_CLIENT_ID") || process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: getEnv("GOOGLE_CLIENT_SECRET") || process.env.GOOGLE_CLIENT_SECRET!,
     }),
   ],
   session: {
@@ -77,7 +80,7 @@ const handler = NextAuth({
             .setProtectedHeader({ alg: "HS256" })
             .setIssuedAt()
             .setExpirationTime("24h")
-            .sign(CIRISNODE_JWT_KEY);
+            .sign(getCirisNodeKey());
         }
       }
       return token;
