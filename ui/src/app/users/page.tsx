@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import { apiFetch } from "../../lib/api";
 import RoleGuard from "../../components/RoleGuard";
 
@@ -46,6 +47,8 @@ export default function UsersPage() {
 }
 
 function UsersContent() {
+  const { data: session } = useSession();
+  const token = session?.user?.apiToken;
   const [users, setUsers] = useState<User[]>([]);
   const [profiles, setProfiles] = useState<AuthorityProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -58,10 +61,11 @@ function UsersContent() {
   const [inviting, setInviting] = useState(false);
 
   const fetchData = useCallback(async () => {
+    if (!token) return;
     try {
       const [usersData, profilesData] = await Promise.all([
-        apiFetch<User[]>("/auth/users"),
-        apiFetch<AuthorityProfile[]>("/api/v1/admin/authorities").catch(
+        apiFetch<User[]>("/auth/users", { token }),
+        apiFetch<AuthorityProfile[]>("/api/v1/admin/authorities", { token }).catch(
           () => [] as AuthorityProfile[]
         ),
       ]);
@@ -73,7 +77,7 @@ function UsersContent() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     fetchData();
@@ -86,6 +90,7 @@ function UsersContent() {
       await apiFetch("/api/v1/admin/users/invite", {
         method: "POST",
         body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
+        token,
       });
       setInviteEmail("");
       fetchData();
@@ -101,6 +106,7 @@ function UsersContent() {
       await apiFetch(`/auth/users/${username}/role`, {
         method: "POST",
         body: JSON.stringify({ role: newRole }),
+        token,
       });
       fetchData();
     } catch (err) {
@@ -111,7 +117,7 @@ function UsersContent() {
   const deleteUser = async (username: string) => {
     if (!confirm(`Delete user ${username}?`)) return;
     try {
-      await apiFetch(`/auth/users/${username}`, { method: "DELETE" });
+      await apiFetch(`/auth/users/${username}`, { method: "DELETE", token });
       fetchData();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to delete user");
@@ -211,6 +217,7 @@ function UsersContent() {
                   onUpdateRole={updateRole}
                   onDelete={deleteUser}
                   onProfileUpdated={fetchData}
+                  token={token}
                 />
               );
             })}
@@ -231,6 +238,7 @@ function UserRow({
   onUpdateRole,
   onDelete,
   onProfileUpdated,
+  token,
 }: {
   user: User;
   profile?: AuthorityProfile;
@@ -239,6 +247,7 @@ function UserRow({
   onUpdateRole: (username: string, role: string) => void;
   onDelete: (username: string) => void;
   onProfileUpdated: () => void;
+  token?: string;
 }) {
   return (
     <>
@@ -311,6 +320,7 @@ function UserRow({
               userId={user.id}
               profile={profile}
               onSaved={onProfileUpdated}
+              token={token}
             />
           </td>
         </tr>
@@ -325,10 +335,12 @@ function AuthorityProfileEditor({
   userId,
   profile,
   onSaved,
+  token,
 }: {
   userId: number;
   profile?: AuthorityProfile;
   onSaved: () => void;
+  token?: string;
 }) {
   const [expertise, setExpertise] = useState(
     profile?.expertise_domains.join(", ") || ""
@@ -378,6 +390,7 @@ function AuthorityProfileEditor({
       await apiFetch(`/api/v1/admin/authorities/${userId}`, {
         method: "PUT",
         body: JSON.stringify(body),
+        token,
       });
       onSaved();
     } catch (err) {

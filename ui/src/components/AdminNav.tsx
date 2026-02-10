@@ -34,15 +34,18 @@ export default function AdminNav() {
 
   const role = session?.user?.role || "anonymous";
 
+  const token = session?.user?.apiToken;
+
   // Poll for pending WBD task count
   useEffect(() => {
-    if (!session) return;
+    if (!session || !token) return;
     let cancelled = false;
 
     const fetchCount = async () => {
       try {
         const data = await apiFetch<{ tasks: { status: string }[] }>(
-          "/api/v1/wbd/tasks?state=open"
+          "/api/v1/wbd/tasks?state=open",
+          { token }
         );
         if (!cancelled) {
           setPendingCount(data.tasks?.length || 0);
@@ -58,7 +61,7 @@ export default function AdminNav() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [session]);
+  }, [session, token]);
 
   const visibleItems = NAV_ITEMS.filter((item) => item.roles.includes(role));
   const roleInfo = ROLE_LABELS[role];

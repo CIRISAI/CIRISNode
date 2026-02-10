@@ -1,7 +1,12 @@
 import NextAuth from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
+import { SignJWT } from "jose";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://node.ciris.ai";
+// JWT_SECRET must match CIRISNode's JWT_SECRET (cirisnode_jwt_secret), separate from NEXTAUTH_SECRET
+const CIRISNODE_JWT_KEY = new TextEncoder().encode(
+  process.env.JWT_SECRET || "testsecret"
+);
 
 const handler = NextAuth({
   providers: [
@@ -63,6 +68,16 @@ const handler = NextAuth({
             // Default to admin for @ciris.ai, anonymous otherwise
             token.role = email.endsWith("@ciris.ai") ? "admin" : "anonymous";
           }
+
+          // Mint a CIRISNode-compatible JWT for API calls
+          token.apiToken = await new SignJWT({
+            sub: email,
+            role: token.role || "anonymous",
+          })
+            .setProtectedHeader({ alg: "HS256" })
+            .setIssuedAt()
+            .setExpirationTime("24h")
+            .sign(CIRISNODE_JWT_KEY);
         }
       }
       return token;
@@ -70,6 +85,7 @@ const handler = NextAuth({
     async session({ session, token }) {
       if (session.user) {
         session.user.role = (token.role as string) || "anonymous";
+        session.user.apiToken = token.apiToken as string;
       }
       return session;
     },

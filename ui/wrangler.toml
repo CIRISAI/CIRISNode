@@ -33,5 +33,6 @@ NEXT_PUBLIC_API_URL = "https://node.ciris.ai"
 ALLOWED_EMAIL_DOMAIN = "ciris.ai"
 
 # Secrets — set via Cloudflare dashboard or wrangler CLI:
-#   npx wrangler secret put NEXTAUTH_SECRET
-#   npx wrangler secret put GOOGLE_CLIENT_SECRET
+#   npx wrangler secret put NEXTAUTH_SECRET       (NextAuth session encryption)
+#   npx wrangler secret put GOOGLE_CLIENT_SECRET   (Google OAuth)
+#   npx wrangler secret put JWT_SECRET             (must match CIRISNode's JWT_SECRET for API auth)

@@ -76,6 +76,7 @@ export default function OversightPage() {
 function WBDQueue() {
   const { data: session } = useSession();
   const role = session?.user?.role || "anonymous";
+  const token = session?.user?.apiToken;
   const isAdmin = role === "admin";
 
   const [tasks, setTasks] = useState<WBDTask[]>([]);
@@ -87,8 +88,9 @@ function WBDQueue() {
   const [comment, setComment] = useState("");
 
   const fetchTasks = useCallback(async () => {
+    if (!token) return;
     try {
-      const data = await apiFetch<{ tasks: WBDTask[] }>("/api/v1/wbd/tasks");
+      const data = await apiFetch<{ tasks: WBDTask[] }>("/api/v1/wbd/tasks", { token });
       setTasks(data.tasks || []);
       setError(null);
     } catch (err) {
@@ -96,12 +98,12 @@ function WBDQueue() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [token]);
 
   // Fetch authority users for reassignment dropdown (admin only)
   useEffect(() => {
-    if (!isAdmin) return;
-    apiFetch<AuthorityUser[]>("/auth/users")
+    if (!isAdmin || !token) return;
+    apiFetch<AuthorityUser[]>("/auth/users", { token })
       .then((users) =>
         setAuthorities(
           users.filter(
@@ -110,7 +112,7 @@ function WBDQueue() {
         )
       )
       .catch(() => {});
-  }, [isAdmin]);
+  }, [isAdmin, token]);
 
   useEffect(() => {
     fetchTasks();
@@ -122,6 +124,7 @@ function WBDQueue() {
       await apiFetch(`/api/v1/wbd/tasks/${resolveId}/resolve`, {
         method: "POST",
         body: JSON.stringify({ decision, comment }),
+        token,
       });
       setResolveId(null);
       setComment("");
@@ -136,6 +139,7 @@ function WBDQueue() {
       await apiFetch(`/api/v1/wbd/tasks/${taskId}/assign`, {
         method: "PATCH",
         body: JSON.stringify({ assigned_to: assignee }),
+        token,
       });
       fetchTasks();
     } catch (err) {
