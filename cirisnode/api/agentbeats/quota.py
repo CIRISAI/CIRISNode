@@ -116,6 +116,13 @@ async def get_usage_count(actor: str, tier: str) -> tuple[int, int | None, datet
 
 async def check_quota(actor: str) -> None:
     """Raise ``QuotaDenied`` if the actor has exhausted their quota."""
+    # Ensure actor has a Stripe customer record + tenant_tiers row
+    try:
+        from cirisnode.services.stripe_sync import ensure_stripe_customer
+        await ensure_stripe_customer(actor)
+    except Exception as exc:
+        logger.warning("Stripe sync failed (non-fatal): %s", exc)
+
     tier = await get_tenant_tier(actor)
     count, limit, reset = await get_usage_count(actor, tier)
 

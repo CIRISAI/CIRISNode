@@ -19,6 +19,7 @@ from cirisnode.api.evaluations.routes import evaluations_router, usage_router
 from cirisnode.api.agentbeats.routes import agentbeats_router
 from cirisnode.api.agentbeats.profiles import profiles_router
 from cirisnode.api.billing.routes import billing_router
+from cirisnode.api.admin.routes import admin_router
 from cirisnode.mcp.transport import mcp_app
 import os
 
@@ -56,6 +57,8 @@ _allowed_origins = [
     "https://ethicsengine.org",
     "https://www.ethicsengine.org",
     "https://admin.ethicsengine.org",
+    "https://portal.ethicsengine.org",
+    "https://api.portal.ethicsengine.org",
 ]
 # Only allow localhost in development
 if os.getenv("NODE_ENV", "production") == "development":
@@ -112,6 +115,9 @@ app.include_router(profiles_router)     # /api/v1/agent-profiles CRUD
 
 # Billing — Stripe checkout/portal/webhook proxy
 app.include_router(billing_router)     # /api/v1/billing/checkout, /portal, /webhook
+
+# Admin — tenant tier management (requires admin JWT)
+app.include_router(admin_router)       # /api/v1/admin/tenants/{id}/tier
 
 # MCP Server (mounted as sub-application)
 app.mount("/mcp", mcp_app)              # /mcp/sse, /mcp/messages/

@@ -56,3 +56,4 @@ a2a-sdk[all]==0.3.22
 mcp[cli]==1.26.0
 sse-starlette==2.1.0
 asyncpg>=0.29.0
+stripe>=8.0.0
