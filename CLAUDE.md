@@ -64,7 +64,7 @@ Migrations auto-run at startup via `cirisnode/db/migrator.py`.
 
 ## Integrations
 
-- **Calls**: Portal API (`EEE_BASE_URL`) for actor standing checks (service JWT auth)
+- **Calls**: Portal API (`PORTAL_API_URL`) for actor standing checks (service JWT auth)
 - **Serves to**: ethicsengine-site (evaluation data, scores, usage)
 - **Does NOT call**: Stripe directly (all billing via Portal API)
 
@@ -80,7 +80,7 @@ Migrations auto-run at startup via `cirisnode/db/migrator.py`.
 ```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-cp .env.example .env  # Set JWT_SECRET, DATABASE_URL, REDIS_URL, EEE_BASE_URL
+cp .env.example .env  # Set JWT_SECRET, DATABASE_URL, REDIS_URL, PORTAL_API_URL
 .venv/bin/uvicorn cirisnode.main:app --reload --port 8001
 ```
 

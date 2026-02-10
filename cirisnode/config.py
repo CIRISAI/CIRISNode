@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     EEE_RETRY_DELAY: float = 1.0  # Base delay between retries (seconds)
     HE300_CACHE_TTL: int = 3600  # Cache scenario data for 1 hour (seconds)
 
+    # --- Portal API (billing/gating delegation) ---
+    PORTAL_API_URL: str = "https://api.portal.ethicsengine.org"  # Portal API for standing checks
+
     # --- A2A Protocol Settings ---
     A2A_ENABLED: bool = True  # Enable A2A protocol endpoints
     MCP_ENABLED: bool = True  # Enable MCP server endpoints

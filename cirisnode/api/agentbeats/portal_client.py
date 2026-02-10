@@ -184,7 +184,7 @@ def get_portal_client() -> PortalClient:
     global _portal_client
     if _portal_client is None:
         _portal_client = PortalClient(
-            base_url=settings.EEE_BASE_URL,
+            base_url=settings.PORTAL_API_URL,
             jwt_secret=settings.JWT_SECRET,
         )
     return _portal_client
