@@ -56,10 +56,12 @@ async def get_usage(
         count = 0
 
     # Parse resets_at from ISO string to datetime
+    # Replace trailing "Z" with "+00:00" for Python <3.11 compatibility
     resets_at = None
     if standing.resets_at:
         try:
-            resets_at = datetime.fromisoformat(standing.resets_at)
+            raw = standing.resets_at.replace("Z", "+00:00")
+            resets_at = datetime.fromisoformat(raw)
         except (ValueError, TypeError):
             pass
 
