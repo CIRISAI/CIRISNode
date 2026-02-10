@@ -18,7 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from cirisnode.api.a2a.auth import validate_a2a_auth
 from cirisnode.utils.signer import sign_data, get_public_key_pem
-from cirisnode.api.agentbeats.quota import get_tenant_tier, get_usage_count, TIERS
+from cirisnode.api.agentbeats.portal_client import get_portal_client
+from cirisnode.api.agentbeats.quota import count_evals_in_window
 from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.schema.evaluation_schemas import (
     EvaluationDetail,
@@ -45,23 +46,33 @@ async def get_usage(
 ):
     """Return tiered usage for the authenticated user.
 
-    Tiers:
-      - community (free):   1 eval / week
-      - pro ($399/mo):     100 evals / month
-      - enterprise:        unlimited
+    Delegates tier/standing info to Portal API, counts evals locally.
     """
-    tier = await get_tenant_tier(actor)
-    count, limit, reset = await get_usage_count(actor, tier)
-    tier_def = TIERS.get(tier, TIERS["community"])
-    window = tier_def["window"] or "month"
+    standing = await get_portal_client().get_standing(actor)
+
+    if standing.limit is not None:
+        count = await count_evals_in_window(actor, standing.window)
+    else:
+        count = 0
+
+    # Parse resets_at from ISO string to datetime
+    resets_at = None
+    if standing.resets_at:
+        try:
+            resets_at = datetime.fromisoformat(standing.resets_at)
+        except (ValueError, TypeError):
+            pass
 
     return UsageResponse(
-        tier=tier,
+        tier=standing.tier,
         runs_used=count,
-        limit=limit,
-        can_run=limit is None or count < limit,
-        window=window,
-        resets_at=reset,
+        limit=standing.limit,
+        can_run=(
+            standing.standing == "good"
+            and (standing.limit is None or count < standing.limit)
+        ),
+        window=standing.window or "month",
+        resets_at=resets_at,
     )
 
 

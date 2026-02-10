@@ -16,7 +16,6 @@ import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from cirisnode.api.agentbeats.auth import resolve_actor
-from cirisnode.api.agentbeats.quota import TIERS
 from cirisnode.config import settings
 
 logger = logging.getLogger(__name__)
@@ -52,11 +51,18 @@ _PLAN_PRICES = {
 }
 
 
+_PLAN_TIERS = {
+    "community": {"window": "week", "limit": 1},
+    "pro": {"window": "month", "limit": 100},
+    "enterprise": {"window": None, "limit": None},
+}
+
+
 @billing_router.get("/plans")
 async def list_plans():
     """Return available subscription plans (public, no auth required)."""
     plans = []
-    for name, tier_def in TIERS.items():
+    for name, tier_def in _PLAN_TIERS.items():
         price = _PLAN_PRICES.get(name, {"amount": None, "formatted": "Contact us"})
         plans.append({
             "id": name,

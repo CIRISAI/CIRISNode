@@ -1,5 +1,11 @@
 """Admin endpoints for tenant management.
 
+DEPRECATED: These endpoints write to the local tenant_tiers table, but quota
+enforcement now delegates to Portal API (GET /api/v1/standing/{actor}).
+The tenant_tiers table is no longer read by quota.py. These endpoints are
+kept for backward compatibility during transition and will be removed in
+a future release.
+
 PUT  /api/v1/admin/tenants/{tenant_id}/tier  — set tier override (DB only)
 GET  /api/v1/admin/tenants/{tenant_id}       — get tenant info
 """

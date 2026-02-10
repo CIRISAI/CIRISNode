@@ -1,20 +1,23 @@
-"""Tiered usage quota enforcement.
+"""Tiered usage quota enforcement — delegated to Portal API.
 
-Subscription tiers:
+CIRISNode no longer decides tiers locally. All billing/gating logic is
+owned by Portal API + Stripe. CIRISNode only:
+  1. Asks Portal API for actor standing (tier, limit, window)
+  2. Counts evaluations locally from the evaluations table
+  3. Compares count vs limit
+
+Subscription tiers (defined in Portal API):
   - community (free):   1 eval / week    (resets Monday 00:00 UTC)
   - pro ($399/mo):     100 evals / month  (resets 1st of month 00:00 UTC)
   - enterprise:        unlimited
-
-Tier resolution:
-  The ``tenant_tiers`` table in PostgreSQL stores the current tier per tenant.
-  If a row doesn't exist the tenant is assumed to be community (free).
-  Portal API writes to this table via CIRISNode admin endpoints when
-  subscriptions change in Stripe.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from fastapi import HTTPException
+
+from cirisnode.api.agentbeats.portal_client import StandingResult, get_portal_client
 from cirisnode.db.pg_pool import get_pg_pool
 
 logger = logging.getLogger(__name__)
@@ -25,32 +28,10 @@ class QuotaDenied(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Tier definitions
+# SQL — local eval counting (CIRISNode owns this data)
 # ---------------------------------------------------------------------------
 
-TIERS = {
-    "community": {"window": "week", "limit": 1},
-    "pro": {"window": "month", "limit": 100},
-    "enterprise": {"window": None, "limit": None},  # unlimited
-}
-
-
-# ---------------------------------------------------------------------------
-# SQL
-# ---------------------------------------------------------------------------
-
-TIER_SQL = """
-    SELECT tier FROM tenant_tiers WHERE tenant_id = $1
-"""
-
-USAGE_WEEK_SQL = """
-    SELECT count(*) FROM evaluations
-    WHERE tenant_id = $1
-      AND eval_type = 'client'
-      AND created_at > $2
-"""
-
-USAGE_MONTH_SQL = """
+USAGE_SQL = """
     SELECT count(*) FROM evaluations
     WHERE tenant_id = $1
       AND eval_type = 'client'
@@ -59,16 +40,8 @@ USAGE_MONTH_SQL = """
 
 
 # ---------------------------------------------------------------------------
-# Quota check
+# Window helpers
 # ---------------------------------------------------------------------------
-
-
-async def get_tenant_tier(actor: str) -> str:
-    """Look up the subscription tier for *actor*.  Defaults to 'community'."""
-    pool = await get_pg_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchval(TIER_SQL, actor)
-    return row or "community"
 
 
 def _week_start(now: datetime) -> datetime:
@@ -84,55 +57,83 @@ def _month_start(now: datetime) -> datetime:
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-async def get_usage_count(actor: str, tier: str) -> tuple[int, int | None, datetime]:
-    """Return (current_count, limit, window_reset) for the actor's tier."""
+# ---------------------------------------------------------------------------
+# Local eval count
+# ---------------------------------------------------------------------------
+
+
+async def count_evals_in_window(actor: str, window: str | None) -> int:
+    """Count evaluations for the actor in the current usage window."""
+    if window is None:
+        return 0  # unlimited (enterprise)
+
     now = datetime.now(timezone.utc)
-    tier_def = TIERS.get(tier, TIERS["community"])
-
-    if tier_def["limit"] is None:
-        return 0, None, now  # enterprise — unlimited
-
-    pool = await get_pg_pool()
-    if tier_def["window"] == "month":
+    if window == "month":
         window_start = _month_start(now)
-        sql = USAGE_MONTH_SQL
-        # Next reset: 1st of next month
-        if now.month == 12:
-            reset = now.replace(year=now.year + 1, month=1, day=1,
-                                hour=0, minute=0, second=0, microsecond=0)
-        else:
-            reset = now.replace(month=now.month + 1, day=1,
-                                hour=0, minute=0, second=0, microsecond=0)
     else:
         window_start = _week_start(now)
-        sql = USAGE_WEEK_SQL
-        from datetime import timedelta
-        reset = window_start + timedelta(days=7)
 
+    pool = await get_pg_pool()
     async with pool.acquire() as conn:
-        count = await conn.fetchval(sql, actor, window_start) or 0
+        count = await conn.fetchval(USAGE_SQL, actor, window_start) or 0
 
-    return count, tier_def["limit"], reset
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Quota check — delegates to Portal API
+# ---------------------------------------------------------------------------
 
 
 async def check_quota(actor: str) -> None:
-    """Raise ``QuotaDenied`` if the actor has exhausted their quota."""
-    tier = await get_tenant_tier(actor)
-    count, limit, reset = await get_usage_count(actor, tier)
+    """Check quota via Portal API standing. Raise QuotaDenied if exhausted."""
+    standing = await get_portal_client().get_standing(actor)
 
-    if limit is not None and count >= limit:
-        tier_label = tier.capitalize()
-        window = "month" if TIERS[tier]["window"] == "month" else "week"
+    # Portal API unreachable — deny benchmark runs (503)
+    if standing.standing == "degraded":
+        raise HTTPException(
+            status_code=503,
+            detail="Billing service temporarily unavailable. Please try again shortly.",
+        )
+
+    # Account not in good standing
+    if standing.standing != "good":
+        raise QuotaDenied(
+            f"Account standing: {standing.standing}. "
+            "Please check your subscription at https://ethicsengine.org/pricing"
+        )
+
+    # Unlimited tier (enterprise)
+    if standing.limit is None:
+        logger.info(
+            "quota_check_passed",
+            extra={"actor": actor, "tier": standing.tier, "usage": 0, "limit": None},
+        )
+        return
+
+    # Count local evals and check against Portal-provided limit
+    count = await count_evals_in_window(actor, standing.window)
+
+    if count >= standing.limit:
+        tier_label = standing.tier.capitalize()
+        window = standing.window or "week"
+        resets = standing.resets_at or ""
         logger.warning(
             "quota_denied",
-            extra={"actor": actor, "tier": tier, "usage": count, "limit": limit},
+            extra={"actor": actor, "tier": standing.tier, "usage": count, "limit": standing.limit},
         )
         raise QuotaDenied(
-            f"{tier_label} plan limit reached: {count}/{limit} evaluations this {window}. "
-            f"Resets {reset.isoformat()}. Upgrade at https://ethicsengine.org/pricing"
+            f"{tier_label} plan limit reached: {count}/{standing.limit} evaluations this {window}. "
+            f"Resets {resets}. Upgrade at https://ethicsengine.org/pricing"
         )
 
     logger.info(
         "quota_check_passed",
-        extra={"actor": actor, "tier": tier, "usage": count, "limit": limit, "resets": reset.isoformat()},
+        extra={
+            "actor": actor,
+            "tier": standing.tier,
+            "usage": count,
+            "limit": standing.limit,
+            "resets": standing.resets_at,
+        },
     )

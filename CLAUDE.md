@@ -2,7 +2,7 @@
 
 ## Role
 
-Benchmark execution gateway + evaluation read APIs. **NO finance/billing logic.** Stripe lives exclusively in Portal API.
+Benchmark execution gateway + evaluation read APIs. **NO finance/billing logic.** Stripe lives exclusively in Portal API. CIRISNode delegates all billing/gating decisions to Portal API via the standing endpoint.
 
 ## Tech Stack
 
@@ -16,15 +16,40 @@ Benchmark execution gateway + evaluation read APIs. **NO finance/billing logic.*
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| **agentbeats** | `cirisnode/api/agentbeats/` | Benchmark execution + tiered quota enforcement |
-| **evaluations** | `cirisnode/api/evaluations/` | Evaluation read, delete, report endpoints |
+| **agentbeats** | `cirisnode/api/agentbeats/` | Benchmark execution + quota enforcement |
+| **portal_client** | `cirisnode/api/agentbeats/portal_client.py` | Portal API client for standing checks (60s cache) |
+| **quota** | `cirisnode/api/agentbeats/quota.py` | Quota check — calls Portal API + counts local evals |
+| **evaluations** | `cirisnode/api/evaluations/` | Evaluation read, delete, report, usage endpoints |
 | **scores** | `cirisnode/api/scores/` | Public leaderboard |
-| **admin** | `cirisnode/api/admin/` | Tier DB writes only (called by Portal API) |
-| **quota** | `cirisnode/api/agentbeats/quota.py` | Tiered usage limits (community/pro/enterprise) |
+| **billing** | `cirisnode/api/billing/` | Plan display + billing proxy to Portal API |
+| **admin** | `cirisnode/api/admin/` | DEPRECATED: tier DB writes (no longer read by quota) |
+
+## Quota Architecture (2026-02-10)
+
+CIRISNode no longer decides tiers locally. The flow is:
+
+```
+User requests benchmark or usage
+    ↓
+CIRISNode calls Portal API: GET /api/v1/standing/{actor}
+    ↓ (cached 60s in PortalClient)
+Portal API looks up Stripe customer → returns tier, standing, limit, window
+    ↓
+CIRISNode counts local evals in window (evaluations table)
+    ↓
+CIRISNode compares count vs limit → allow/deny
+```
+
+- **PortalClient** (`portal_client.py`): Async httpx client, service JWT auth, 60s cache
+- **check_quota()**: Calls PortalClient, counts local evals, raises QuotaDenied
+- **count_evals_in_window()**: SQL count on evaluations table
+- If Portal API unreachable: returns standing="degraded", benchmark denied (503)
+- `tenant_tiers` table is no longer read by quota.py (DEPRECATED)
 
 ## Auth
 
 - **User auth**: JWT signed with `JWT_SECRET` (shared with ethicsengine-site via `NEXTAUTH_SECRET`)
+- **Service auth**: JWT with `role: "service"` claim, used by PortalClient to call Portal API
 - **Admin auth**: JWT with `role: "admin"` claim, signed by Portal API using shared `JWT_SECRET`
 - **Agent auth**: `X-Agent-Token` header for agent event POST/GET; admin JWT for DELETE/PATCH
 
@@ -32,29 +57,30 @@ Benchmark execution gateway + evaluation read APIs. **NO finance/billing logic.*
 
 PostgreSQL tables:
 - `evaluations` — benchmark results (read path, written by Celery workers)
-- `tenant_tiers` — tier + stripe_customer_id per tenant (written by admin endpoint)
+- `tenant_tiers` — DEPRECATED: tier per tenant (no longer read by quota.py)
 - `agent_profiles` — agent registration data
 
 Migrations auto-run at startup via `cirisnode/db/migrator.py`.
 
 ## Integrations
 
-- **Receives from**: Portal API (admin JWT for tier management)
-- **Serves to**: ethicsengine-site (evaluation data, scores, quota checks)
-- **Does NOT call**: Stripe, billing services, or Portal API
+- **Calls**: Portal API (`EEE_BASE_URL`) for actor standing checks (service JWT auth)
+- **Serves to**: ethicsengine-site (evaluation data, scores, usage)
+- **Does NOT call**: Stripe directly (all billing via Portal API)
 
 ## NOT Responsible For
 
 - Stripe SDK calls or customer management (that's Portal API)
 - Billing, subscriptions, or payment processing
 - Customer creation or Stripe customer sync
+- Tier definitions or limits (owned by Portal API)
 
 ## Dev Setup
 
 ```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-cp .env.example .env  # Set JWT_SECRET, DATABASE_URL, REDIS_URL
+cp .env.example .env  # Set JWT_SECRET, DATABASE_URL, REDIS_URL, EEE_BASE_URL
 .venv/bin/uvicorn cirisnode.main:app --reload --port 8001
 ```
 
@@ -77,11 +103,12 @@ ethicsengine-site           ethicsengine-portal
   v                                v
 CIRISNode  <-- YOU ARE HERE  ethicsengine-portal-api
 (node.ciris.ai)             (api.portal.ethicsengine.org)
+  |    |                       |           |
+  |    | GET /standing/{actor} |           |
+  |    +---------------------> |           |
   |                            |           |
-  | (DB: evals,               |           |
-  |  tenant_tiers)            |           |
-  v                           v           v
-PostgreSQL               CIRISNode    Stripe
-                         (admin JWT   (system of
-                          for tiers)   record)
+  | (DB: evals)               |           v
+  v                            |        Stripe
+PostgreSQL                     |      (system of
+                               |       record)
 ```
