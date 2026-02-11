@@ -8,8 +8,10 @@ DirectAdapter is omitted (frontier-only, not needed for client evals).
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
+import re
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, Tuple
 
@@ -95,6 +97,116 @@ def _proxy_token_usage(
         "output_tokens": _estimate_tokens(response_text),
         "reasoning_tokens": 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit retry helper
+# ---------------------------------------------------------------------------
+
+MAX_RETRIES = 5
+DEFAULT_BACKOFF = 5.0   # seconds
+MAX_BACKOFF = 120.0     # cap at 2 minutes
+
+def _parse_retry_after(response: httpx.Response) -> Optional[float]:
+    """Extract wait time from Retry-After header (seconds or HTTP-date)."""
+    val = response.headers.get("retry-after") or response.headers.get("Retry-After")
+    if val:
+        try:
+            return float(val)
+        except ValueError:
+            pass
+    return None
+
+
+def _parse_retry_from_body(text: str) -> Optional[float]:
+    """Extract wait time hints from error message body.
+
+    Providers sometimes embed retry hints like "try again in 30s" or
+    "retry after 60 seconds" in the error JSON.
+    """
+    # Match patterns like "try again in 30s", "retry after 60 seconds",
+    # "wait 45.5 seconds", "in 30000ms"
+    m = re.search(
+        r"(?:retry|try again|wait)\s*(?:after|in)?\s*(\d+\.?\d*)\s*(milliseconds?|ms|minutes?|min|seconds?|sec|s)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        val = float(m.group(1))
+        unit = m.group(2).lower()
+        if unit in ("ms", "millisecond", "milliseconds"):
+            return val / 1000.0
+        if unit in ("minute", "minutes", "min"):
+            return val * 60.0
+        return val  # seconds
+    return None
+
+
+def _compute_backoff(attempt: int, response: Optional[httpx.Response], error_text: str) -> float:
+    """Determine how long to wait before retrying.
+
+    Priority: Retry-After header > body hint > exponential backoff.
+    """
+    if response is not None:
+        header_wait = _parse_retry_after(response)
+        if header_wait is not None:
+            return min(header_wait, MAX_BACKOFF)
+
+    body_wait = _parse_retry_from_body(error_text)
+    if body_wait is not None:
+        return min(body_wait, MAX_BACKOFF)
+
+    # Exponential backoff: 5, 10, 20, 40, 80 (capped at MAX_BACKOFF)
+    return min(DEFAULT_BACKOFF * (2 ** attempt), MAX_BACKOFF)
+
+
+async def _post_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    json: Dict[str, Any],
+    headers: Dict[str, str],
+    timeout: float,
+    adapter_tag: str,
+    scenario_id: str,
+    model: str,
+) -> httpx.Response:
+    """POST with intelligent retry on 429 and 529 (overloaded).
+
+    Retries rate-limit and overloaded responses with backoff parsed from
+    the Retry-After header, error body hints, or exponential fallback.
+    Non-retryable errors (4xx other than 429, 5xx other than 529) raise immediately.
+    """
+    last_exc: Optional[httpx.HTTPStatusError] = None
+
+    for attempt in range(MAX_RETRIES):
+        response = await client.post(url, json=json, headers=headers, timeout=timeout)
+
+        if response.status_code not in (429, 529):
+            response.raise_for_status()
+            return response
+
+        # Rate-limited or overloaded — compute backoff and retry
+        error_text = response.text[:500]
+        wait = _compute_backoff(attempt, response, error_text)
+        logger.warning(
+            "[%s] %s model=%s: HTTP %d — retrying in %.1fs (attempt %d/%d): %s",
+            adapter_tag, scenario_id, model, response.status_code,
+            wait, attempt + 1, MAX_RETRIES, error_text[:150],
+        )
+        last_exc = httpx.HTTPStatusError(
+            f"HTTP {response.status_code}",
+            request=response.request,
+            response=response,
+        )
+        await asyncio.sleep(wait)
+
+    # Exhausted retries — raise the last 429/529
+    if last_exc is not None:
+        raise last_exc
+    # Should never reach here, but just in case
+    response.raise_for_status()
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -375,13 +487,11 @@ class OpenAIAdapter(ProtocolAdapter):
             headers["api-version"] = cfg.api_version
 
         try:
-            response = await client.post(
-                url,
-                json=body,
-                headers=headers,
-                timeout=agent_spec.timeout,
+            response = await _post_with_retry(
+                client, url,
+                json=body, headers=headers, timeout=agent_spec.timeout,
+                adapter_tag="OPENAI", scenario_id=scenario_id, model=cfg.model,
             )
-            response.raise_for_status()
             data = response.json()
 
             # Extract token usage from OpenAI response
@@ -470,13 +580,11 @@ class AnthropicAdapter(ProtocolAdapter):
         }
 
         try:
-            response = await client.post(
-                url,
-                json=body,
-                headers=headers,
-                timeout=agent_spec.timeout,
+            response = await _post_with_retry(
+                client, url,
+                json=body, headers=headers, timeout=agent_spec.timeout,
+                adapter_tag="ANTHROPIC", scenario_id=scenario_id, model=cfg.model,
             )
-            response.raise_for_status()
             data = response.json()
 
             # Extract token usage from Anthropic response
@@ -571,13 +679,11 @@ class GeminiAdapter(ProtocolAdapter):
         headers = {"Content-Type": "application/json"}
 
         try:
-            response = await client.post(
-                url,
-                json=body,
-                headers=headers,
-                timeout=agent_spec.timeout,
+            response = await _post_with_retry(
+                client, url,
+                json=body, headers=headers, timeout=agent_spec.timeout,
+                adapter_tag="GEMINI", scenario_id=scenario_id, model=cfg.model,
             )
-            response.raise_for_status()
             data = response.json()
 
             # Extract token usage from Gemini response
