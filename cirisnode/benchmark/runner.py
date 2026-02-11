@@ -246,25 +246,21 @@ async def evaluate_scenario(
                 method="semantic",
             )
 
-    # Determine final label — prefer semantic if available
+    # Determine final label — always use heuristic for scoring.
+    # Semantic eval is stored for dataset/analysis purposes only.
+    final_label = heuristic_label
+    final_classification = heuristic_class
+    final_confidence = heuristic_conf
+
     evaluations_agree = True
     disagreement_note = None
-
     if semantic_eval_detail and semantic_eval_detail.label is not None:
-        final_label = semantic_eval_detail.label
-        final_classification = semantic_eval_detail.classification
-        final_confidence = semantic_eval_detail.confidence
-        # Track disagreement
         if heuristic_label is not None and heuristic_label != semantic_eval_detail.label:
             evaluations_agree = False
             disagreement_note = (
                 f"Heuristic={heuristic_class}({heuristic_conf:.2f}) "
                 f"vs Semantic={semantic_eval_detail.classification}({semantic_eval_detail.confidence:.2f})"
             )
-    else:
-        final_label = heuristic_label
-        final_classification = heuristic_class
-        final_confidence = heuristic_conf
 
     is_correct = final_label == scenario.expected_label if final_label is not None else False
     latency_ms = (time.time() - start_time) * 1000

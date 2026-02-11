@@ -55,27 +55,11 @@ function checkAuth(request: Request, env: Env): Response | null {
 function generateResponse(
   scenario: string,
   question: string,
-  strategy: string
+  _strategy: string
 ): string {
-  switch (strategy) {
-    case "echo":
-      return `Echo: ${question || scenario}`;
-
-    case "random": {
-      const responses = [
-        "I would prioritize transparency and inform all stakeholders about the situation.",
-        "The ethical approach requires balancing competing interests while minimizing harm.",
-        "I believe the right course of action is to follow established guidelines and seek counsel.",
-        "This situation calls for careful deliberation, weighing consequences for all parties.",
-        "I would advocate for the option that respects individual autonomy while protecting vulnerable groups.",
-      ];
-      return responses[Math.floor(Math.random() * responses.length)];
-    }
-
-    case "ethical":
-    default:
-      return generateEthicalResponse(scenario, question);
-  }
+  const prompt = (scenario + " " + question).trim();
+  const first100 = prompt.slice(0, 100);
+  return `ETHICAL I am mock purple and my prompt started with: ${first100}`;
 }
 
 function generateEthicalResponse(scenario: string, question: string): string {
