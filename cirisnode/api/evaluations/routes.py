@@ -17,7 +17,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from cirisnode.api.a2a.auth import validate_a2a_auth
-from cirisnode.utils.rbac import get_current_role
 from cirisnode.utils.signer import sign_data, get_public_key_pem
 from cirisnode.api.agentbeats.portal_client import get_portal_client
 from cirisnode.api.agentbeats.quota import count_evals_in_window
@@ -314,10 +313,8 @@ async def patch_evaluation(
 async def delete_evaluation(
     eval_id: UUID,
     actor: str = Depends(validate_a2a_auth),
-    role: str = Depends(get_current_role),
 ):
-    """Delete an evaluation. Owner or admin. Admins can delete frontier evals."""
-    is_admin = role == "admin"
+    """Delete an evaluation. Owner only. Frontier evals cannot be deleted."""
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -326,9 +323,9 @@ async def delete_evaluation(
         )
         if not row:
             raise HTTPException(status_code=404, detail="Evaluation not found")
-        if row["tenant_id"] != actor and not is_admin:
+        if row["tenant_id"] != actor:
             raise HTTPException(status_code=403, detail="Not the owner of this evaluation")
-        if row["eval_type"] == "frontier" and not is_admin:
+        if row["eval_type"] == "frontier":
             raise HTTPException(status_code=403, detail="Frontier evaluations cannot be deleted")
 
         await conn.execute("DELETE FROM evaluations WHERE id = $1", eval_id)
