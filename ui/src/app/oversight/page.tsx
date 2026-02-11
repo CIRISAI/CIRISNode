@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { apiFetch } from "../../lib/api";
+import ConfirmModal from "../../components/ConfirmModal";
+import Toast, { type ToastState } from "../../components/Toast";
 
 /* -- WBD Types -- */
 interface WBDTask {
@@ -86,6 +88,7 @@ function WBDQueue() {
   const [resolveId, setResolveId] = useState<string | null>(null);
   const [decision, setDecision] = useState("approve");
   const [comment, setComment] = useState("");
+  const [toast, setToast] = useState<ToastState | null>(null);
 
   const fetchTasks = useCallback(async () => {
     if (!token) return;
@@ -130,7 +133,7 @@ function WBDQueue() {
       setComment("");
       fetchTasks();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to resolve task");
+      setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to resolve task" });
     }
   };
 
@@ -143,7 +146,7 @@ function WBDQueue() {
       });
       fetchTasks();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to reassign task");
+      setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to reassign task" });
     }
   };
 
@@ -345,6 +348,8 @@ function WBDQueue() {
         )}
       </div>
 
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
+
       {/* Resolved Tasks (collapsed) */}
       {resolvedTasks.length > 0 && (
         <details className="bg-white shadow rounded-lg">
@@ -419,6 +424,10 @@ function AgentEventStream() {
   const [error, setError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [uidFilter, setUidFilter] = useState("");
+  const [confirmState, setConfirmState] = useState<{
+    title: string; message: string; variant?: "danger" | "default"; onConfirm: () => void;
+  } | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
 
   const fetchEvents = useCallback(async () => {
     try {
@@ -448,18 +457,25 @@ function AgentEventStream() {
         prev.map((e) => (e.id === id ? { ...e, archived } : e))
       );
     } catch {
-      alert("Failed to update archive status");
+      setToast({ type: "error", message: "Failed to update archive status" });
     }
   };
 
-  const deleteEvent = async (id: string) => {
-    if (!confirm("Delete this event?")) return;
-    try {
-      await apiFetch(`/api/v1/agent/events/${id}`, { method: "DELETE" });
-      setEvents((prev) => prev.filter((e) => e.id !== id));
-    } catch {
-      alert("Failed to delete event");
-    }
+  const deleteEvent = (id: string) => {
+    setConfirmState({
+      title: "Delete Event",
+      message: "Delete this event?",
+      variant: "danger",
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await apiFetch(`/api/v1/agent/events/${id}`, { method: "DELETE" });
+          setEvents((prev) => prev.filter((e) => e.id !== id));
+        } catch {
+          setToast({ type: "error", message: "Failed to delete event" });
+        }
+      },
+    });
   };
 
   const filtered = events
@@ -507,6 +523,16 @@ function AgentEventStream() {
           Refresh
         </button>
       </div>
+
+      <ConfirmModal
+        isOpen={!!confirmState}
+        title={confirmState?.title ?? ""}
+        message={confirmState?.message ?? ""}
+        variant={confirmState?.variant}
+        onConfirm={() => confirmState?.onConfirm()}
+        onCancel={() => setConfirmState(null)}
+      />
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
 
       {filtered.length === 0 ? (
         <p className="text-gray-500">No agent events found.</p>

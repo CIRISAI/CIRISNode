@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { apiFetch } from "../../lib/api";
 import RoleGuard from "../../components/RoleGuard";
+import Toast, { type ToastState } from "../../components/Toast";
 
 interface HealthData {
   status: string;
@@ -26,6 +27,7 @@ function SystemContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [clearingCache, setClearingCache] = useState(false);
+  const [toast, setToast] = useState<ToastState | null>(null);
 
   const fetchHealth = useCallback(async () => {
     try {
@@ -48,11 +50,10 @@ function SystemContent() {
   const clearCache = async () => {
     setClearingCache(true);
     try {
-      // Clear scores caches by fetching a fresh score (cache invalidation happens server-side)
       await apiFetch("/api/v1/scores");
-      alert("Cache refresh requested.");
+      setToast({ type: "success", message: "Cache refresh requested." });
     } catch {
-      alert("Failed to clear cache.");
+      setToast({ type: "error", message: "Failed to clear cache." });
     } finally {
       setClearingCache(false);
     }
@@ -151,6 +152,8 @@ function SystemContent() {
             ))}
         </dl>
       </div>
+
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
 
       {/* Cache Management */}
       <div className="bg-white shadow rounded-lg p-6">

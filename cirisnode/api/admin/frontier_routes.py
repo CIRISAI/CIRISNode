@@ -90,6 +90,10 @@ GEMINI_PROVIDERS = frozenset({"google"})
 # {sweep_id: {"status": "running"|"paused"|"cancelled"}}
 _sweep_controls: Dict[str, Dict[str, str]] = {}
 
+# In-memory per-model scenario progress for running sweeps
+# {sweep_id: {model_id: {"completed": int, "total": int}}}
+_sweep_model_progress: Dict[str, Dict[str, Dict[str, int]]] = {}
+
 
 def _get_sweep_control(sweep_id: str) -> str:
     """Get control status for a sweep. Returns 'running' if not tracked."""
@@ -223,6 +227,7 @@ class SweepModelStatus(BaseModel):
     status: str
     accuracy: Optional[float] = None
     total_scenarios: Optional[int] = None
+    scenarios_completed: Optional[int] = None
     errors: Optional[int] = None
     error: Optional[str] = None
     token_usage: Optional[Dict[str, Any]] = None
@@ -236,6 +241,9 @@ class SweepProgressResponse(BaseModel):
     pending: int
     running: int
     control_status: str = "running"  # running | paused | cancelled | finished
+    concurrency: int = 50  # per-model scenario concurrency
+    global_concurrency: int = GLOBAL_CONCURRENCY
+    provider_concurrency: int = PROVIDER_CONCURRENCY
     models: List[SweepModelStatus]
 
 
@@ -597,7 +605,7 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
             )
 
     # Register sweep control state
-    _sweep_controls[sweep_id] = {"status": "running"}
+    _sweep_controls[sweep_id] = {"status": "running", "concurrency": str(body.concurrency)}
 
     # Fire background sweep task
     asyncio.create_task(
@@ -671,12 +679,22 @@ async def get_sweep_progress(sweep_id: str):
             except json.JSONDecodeError:
                 tu = None
 
+        # Merge in-memory progress for running models
+        model_id = row["target_model"]
+        sc_completed = None
+        sc_total = row["total_scenarios"]
+        progress_data = _sweep_model_progress.get(sweep_id, {}).get(model_id)
+        if progress_data:
+            sc_completed = progress_data.get("completed", 0)
+            sc_total = progress_data.get("total") or sc_total
+
         models.append(SweepModelStatus(
-            model_id=row["target_model"],
-            display_name=row["display_name"] or row["target_model"],
+            model_id=model_id,
+            display_name=row["display_name"] or model_id,
             status=s,
             accuracy=row["accuracy"],
-            total_scenarios=row["total_scenarios"],
+            total_scenarios=sc_total,
+            scenarios_completed=sc_completed,
             errors=row["errors"],
             error=error,
             token_usage=tu,
@@ -687,6 +705,10 @@ async def get_sweep_progress(sweep_id: str):
     if ctrl == "running" and pending == 0 and running == 0:
         ctrl = "finished"
 
+    # Read per-model concurrency from sweep control state
+    sweep_ctrl = _sweep_controls.get(sweep_id, {})
+    per_model_concurrency = int(sweep_ctrl.get("concurrency", 50))
+
     return SweepProgressResponse(
         sweep_id=sweep_id,
         total=len(rows),
@@ -695,6 +717,9 @@ async def get_sweep_progress(sweep_id: str):
         pending=pending,
         running=running,
         control_status=ctrl,
+        concurrency=per_model_concurrency,
+        global_concurrency=GLOBAL_CONCURRENCY,
+        provider_concurrency=PROVIDER_CONCURRENCY,
         models=models,
     )
 
@@ -913,6 +938,14 @@ async def _execute_sweep(
                 model_id, provider_key, protocol_config.protocol, model_name, model["api_base_url"],
             )
 
+            # Progress callback: update in-memory progress dict
+            def _make_progress_cb(mid: str):
+                def _cb(done: int, total: int):
+                    _sweep_model_progress.setdefault(sweep_id, {})[mid] = {
+                        "completed": done, "total": total,
+                    }
+                return _cb
+
             # Acquire both provider and global semaphore
             async with prov_sem:
                 async with global_sem:
@@ -923,6 +956,7 @@ async def _execute_sweep(
                         concurrency=concurrency,
                         dataset_meta=dataset_meta_dict,
                         semantic_config=semantic_config,
+                        on_progress=_make_progress_cb(model_id),
                     )
 
             # Guard: refuse to publish catastrophic results
@@ -1008,8 +1042,9 @@ async def _execute_sweep(
     tasks = [_run_model(m) for m in models]
     await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Clean up control state
+    # Clean up control state and progress tracking
     _sweep_controls.pop(sweep_id, None)
+    _sweep_model_progress.pop(sweep_id, None)
 
     # Invalidate Redis caches
     try:

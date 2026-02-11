@@ -10,7 +10,7 @@ Benchmark execution gateway + evaluation read APIs. **NO finance/billing logic.*
 - **Database**: PostgreSQL (evaluations, tenant_tiers, agent_profiles)
 - **Queue**: Redis + Celery for async benchmark execution
 - **Auth**: JWT (HS256) — `JWT_SECRET` env var
-- **Deployment**: `prod-us` container via CIRISCore Ansible
+- **Deployment**: Docker → GHCR → Watchtower auto-deploy (see CI/CD section)
 
 ## Key Modules
 
@@ -20,7 +20,7 @@ Benchmark execution gateway + evaluation read APIs. **NO finance/billing logic.*
 | **portal_client** | `cirisnode/api/agentbeats/portal_client.py` | Portal API client for standing checks (60s cache) |
 | **quota** | `cirisnode/api/agentbeats/quota.py` | Quota check — calls Portal API + counts local evals |
 | **evaluations** | `cirisnode/api/evaluations/` | Evaluation read, delete, report, usage endpoints |
-| **scores** | `cirisnode/api/scores/` | Public leaderboard |
+| **scores** | `cirisnode/api/scores/` | Public scores (aggregate: min 5 evals/model, trends at 10) |
 | **billing** | `cirisnode/api/billing/` | Plan display + billing proxy to Portal API |
 | **admin** | `cirisnode/api/admin/` | DEPRECATED tier writes + authority profile CRUD + frontier sweep |
 | **wa/wbd** | `cirisnode/api/wa/`, `cirisnode/api/wbd/` | WBD task submission, routing, resolution |
@@ -208,6 +208,7 @@ curl https://node.ciris.ai/api/v1/admin/frontier-sweep/sweep-abc12345 \
 - Results are `visibility='public'` and appear on the scores page
 - Scenarios loaded once with shared seed for cross-model comparability
 - Models run with bounded parallelism (1 per provider, 3 global) to avoid rate limits
+- Protocol adapters retry HTTP 429/529 with intelligent backoff (Retry-After header → body hints → exponential 5-80s), max 5 retries
 - SSE streaming via `GET /frontier-sweep/{id}/stream` (fetch+ReadableStream, not EventSource)
 - Pause/resume/cancel controls via in-memory `_sweep_controls` dict
 - Redis caches (`scores:frontier`, `embed:scores`, per-model) invalidated after sweep
@@ -262,6 +263,38 @@ Located at `ui/`. Role-aware dashboard with page-level access control.
 
 ```bash
 .venv/bin/python -m pytest tests/ -v
+```
+
+## CI/CD
+
+Continuous deployment pipeline: push to `main` → Docker build → auto-deploy to prod.
+
+### Pipeline (`.github/workflows/deploy.yml`)
+
+1. **Trigger**: Push to `main` branch
+2. **Build**: GitHub Actions builds Docker image using `Dockerfile` (Python 3.10-slim, uvicorn with 4 workers)
+3. **Push**: Image pushed to `ghcr.io/cirisai/cirisnode` with tags `latest` + commit SHA
+4. **Deploy**: Watchtower on prod-us VPS polls GHCR, pulls new `latest` image, restarts container automatically
+
+### Key Details
+
+- **Registry**: `ghcr.io/cirisai/cirisnode`
+- **Auth**: `GITHUB_TOKEN` (automatic via GitHub Actions `packages: write` permission)
+- **Build cache**: GitHub Actions cache (`type=gha`) for faster rebuilds
+- **Image tags**: `latest` (rolling) + short SHA (immutable, for rollback)
+- **No manual deploy step**: Watchtower handles pull + restart on the VPS
+- **Commit to main = deploy to prod** — all changes on `main` go live automatically
+
+### Docker
+
+- `Dockerfile`: Python 3.10-slim, installs requirements, runs `init_db.py` then uvicorn on port 8000
+- `docker-compose.yml`: Full stack (api, celery worker, postgres, redis, admin UI) — used for local/reference, prod uses individual containers
+
+### Rollback
+
+To rollback, push a revert commit to `main` or manually pull a specific SHA tag on the VPS:
+```bash
+docker pull ghcr.io/cirisai/cirisnode:<sha>
 ```
 
 ## Architecture

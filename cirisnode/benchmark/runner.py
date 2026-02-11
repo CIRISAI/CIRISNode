@@ -12,7 +12,7 @@ import ssl
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import certifi
 import httpx
@@ -323,6 +323,7 @@ async def run_batch(
     timeout_per_scenario: float = 60.0,
     dataset_meta: Optional[Dict[str, Any]] = None,
     semantic_config: Optional[SemanticEvalConfig] = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> BatchResult:
     """Run HE-300 benchmark batch with parallel execution.
 
@@ -380,6 +381,8 @@ async def run_batch(
                 )
         completed_count += 1
         total = len(scenarios)
+        if on_progress:
+            on_progress(completed_count, total)
         if completed_count % 25 == 0 or completed_count == total:
             elapsed = time.time() - start_time
             logger.info("[RUNNER] Progress: %d/%d (%.0f%%) — %.1fs elapsed",

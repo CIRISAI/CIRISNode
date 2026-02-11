@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { apiFetch, apiUrl } from "../../lib/api";
 import RoleGuard from "../../components/RoleGuard";
+import ConfirmModal from "../../components/ConfirmModal";
+import Toast, { type ToastState } from "../../components/Toast";
 
 interface FrontierKey {
   provider: string;
@@ -74,6 +76,8 @@ interface SweepModel {
   display_name: string;
   status: string;
   accuracy: number | null;
+  total_scenarios: number | null;
+  scenarios_completed: number | null;
   error: string | null;
 }
 
@@ -85,6 +89,9 @@ interface SweepProgress {
   pending: number;
   running: number;
   control_status: string;
+  concurrency: number;
+  global_concurrency: number;
+  provider_concurrency: number;
   models: SweepModel[];
 }
 
@@ -120,6 +127,12 @@ function FrontierContent() {
   const [activeSweep, setActiveSweep] = useState<SweepProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Modal + toast state
+  const [confirmState, setConfirmState] = useState<{
+    title: string; message: string; variant?: "danger" | "default"; onConfirm: () => void;
+  } | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
 
   // Add model form
   const [showAddForm, setShowAddForm] = useState(false);
@@ -252,7 +265,7 @@ function FrontierContent() {
       setActiveSweep(progress);
       if (action === "cancel") fetchData();
     } catch (err) {
-      alert(err instanceof Error ? err.message : `Failed to ${action} sweep`);
+      setToast({ type: "error", message: err instanceof Error ? err.message : `Failed to ${action} sweep` });
     }
   };
 
@@ -283,21 +296,28 @@ function FrontierContent() {
       });
       fetchData();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to add model");
+      setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to add model" });
     }
   };
 
-  const deleteModel = async (modelId: string) => {
-    if (!confirm(`Delete model ${modelId}?`)) return;
-    try {
-      await apiFetch(`/api/v1/admin/frontier-models/${modelId}`, { method: "DELETE", token });
-      fetchData();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete model");
-    }
+  const deleteModel = (modelId: string) => {
+    setConfirmState({
+      title: "Delete Model",
+      message: `Delete model ${modelId}?`,
+      variant: "danger",
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await apiFetch(`/api/v1/admin/frontier-models/${modelId}`, { method: "DELETE", token });
+          fetchData();
+        } catch (err) {
+          setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to delete model" });
+        }
+      },
+    });
   };
 
-  const launchSweep = async (modelIds?: string[]) => {
+  const launchSweep = (modelIds?: string[]) => {
     const label = modelIds ? modelIds.join(", ") : "all registered models";
     const selectedModels = modelIds
       ? models.filter(m => modelIds.includes(m.model_id))
@@ -306,31 +326,36 @@ function FrontierContent() {
       const est = estimateSweepCost(m.cost_per_1m_input, m.cost_per_1m_output);
       return sum + (est || 0);
     }, 0);
-    // Semantic eval adds ~300 evaluator calls per model (gpt-4o-mini: ~$0.01/model)
     const semanticCost = selectedModels.length * 0.01;
     const grandTotal = totalCost + semanticCost;
-    const costStr = grandTotal > 0 ? ` Estimated cost: $${grandTotal.toFixed(4)} (incl. semantic eval)` : "";
-    if (!confirm(`Launch frontier sweep for ${label}? This runs 300 scenarios per model with semantic evaluation.${costStr}`)) return;
-    try {
-      const body: Record<string, unknown> = {
-        concurrency: 50,
-        semantic_evaluation: true,
-        evaluator_model: "gpt-4o-mini",
-        evaluator_provider: "openai",
-      };
-      if (modelIds) body.model_ids = modelIds;
-      const res = await apiFetch<{ sweep_id: string }>("/api/v1/admin/frontier-sweep", {
-        method: "POST",
-        body: JSON.stringify(body),
-        token,
-      });
-      const progress = await apiFetch<SweepProgress>(
-        `/api/v1/admin/frontier-sweep/${res.sweep_id}`, { token }
-      );
-      setActiveSweep(progress);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to launch sweep");
-    }
+    const costStr = grandTotal > 0 ? `\nEstimated cost: $${grandTotal.toFixed(4)} (incl. semantic eval)` : "";
+    setConfirmState({
+      title: "Launch Frontier Sweep",
+      message: `Launch frontier sweep for ${label}? This runs 300 scenarios per model with semantic evaluation.${costStr}`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          const body: Record<string, unknown> = {
+            concurrency: 50,
+            semantic_evaluation: true,
+            evaluator_model: "gpt-4o-mini",
+            evaluator_provider: "openai",
+          };
+          if (modelIds) body.model_ids = modelIds;
+          const res = await apiFetch<{ sweep_id: string }>("/api/v1/admin/frontier-sweep", {
+            method: "POST",
+            body: JSON.stringify(body),
+            token,
+          });
+          const progress = await apiFetch<SweepProgress>(
+            `/api/v1/admin/frontier-sweep/${res.sweep_id}`, { token }
+          );
+          setActiveSweep(progress);
+        } catch (err) {
+          setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to launch sweep" });
+        }
+      },
+    });
   };
 
   const viewSweep = async (sweepId: string) => {
@@ -340,19 +365,26 @@ function FrontierContent() {
       );
       setActiveSweep(progress);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to load sweep");
+      setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to load sweep" });
     }
   };
 
-  const deleteSweep = async (sweepId: string) => {
-    if (!confirm(`Delete sweep ${sweepId} and all its evaluation data? This cannot be undone.`)) return;
-    try {
-      await apiFetch(`/api/v1/admin/frontier-sweep/${sweepId}`, { method: "DELETE", token });
-      if (activeSweep?.sweep_id === sweepId) setActiveSweep(null);
-      fetchData();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete sweep");
-    }
+  const deleteSweep = (sweepId: string) => {
+    setConfirmState({
+      title: "Delete Sweep",
+      message: `Delete sweep ${sweepId} and all its evaluation data? This cannot be undone.`,
+      variant: "danger",
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await apiFetch(`/api/v1/admin/frontier-sweep/${sweepId}`, { method: "DELETE", token });
+          if (activeSweep?.sweep_id === sweepId) setActiveSweep(null);
+          fetchData();
+        } catch (err) {
+          setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to delete sweep" });
+        }
+      },
+    });
   };
 
   // Auto-fill pricing when model_id matches known models
@@ -702,6 +734,12 @@ function FrontierContent() {
                 )}
               </div>
             </div>
+            {/* Concurrency info */}
+            <div className="flex items-center gap-4 text-xs text-gray-500 mb-3">
+              <span>Scenario concurrency: <strong className="text-gray-700">{activeSweep.concurrency}</strong></span>
+              <span>Global model slots: <strong className="text-gray-700">{activeSweep.global_concurrency}</strong></span>
+              <span>Per-provider: <strong className="text-gray-700">{activeSweep.provider_concurrency}</strong></span>
+            </div>
             <div className="w-full bg-gray-200 rounded-full h-3 mb-4">
               <div
                 className="bg-indigo-600 h-3 rounded-full transition-all"
@@ -716,21 +754,50 @@ function FrontierContent() {
                   <tr>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Model</th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase w-40">Progress</th>
                     <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Accuracy</th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Error</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {activeSweep.models.map((m) => (
-                    <tr key={m.model_id} className={m.status === "running" ? "bg-blue-50" : ""}>
-                      <td className="px-4 py-2 text-sm">{m.display_name || m.model_id}</td>
-                      <td className="px-4 py-2 text-sm">{statusBadge(m.status)}</td>
-                      <td className="px-4 py-2 text-sm text-right font-mono">
-                        {m.accuracy != null ? `${(m.accuracy * 100).toFixed(1)}%` : "-"}
-                      </td>
-                      <td className="px-4 py-2 text-sm text-red-600 truncate max-w-xs">{m.error || ""}</td>
-                    </tr>
-                  ))}
+                  {activeSweep.models.map((m) => {
+                    const pct = m.scenarios_completed != null && m.total_scenarios
+                      ? Math.round((m.scenarios_completed / m.total_scenarios) * 100)
+                      : null;
+                    return (
+                      <tr key={m.model_id} className={m.status === "running" ? "bg-blue-50" : ""}>
+                        <td className="px-4 py-2 text-sm">{m.display_name || m.model_id}</td>
+                        <td className="px-4 py-2 text-sm">{statusBadge(m.status)}</td>
+                        <td className="px-4 py-2 text-sm">
+                          {m.status === "running" && pct != null ? (
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 bg-gray-200 rounded-full h-2">
+                                <div
+                                  className="bg-blue-500 h-2 rounded-full transition-all"
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                              <span className="text-xs font-mono text-gray-600 w-12 text-right">
+                                {m.scenarios_completed}/{m.total_scenarios}
+                              </span>
+                            </div>
+                          ) : m.status === "completed" ? (
+                            <span className="text-xs text-green-600 font-medium">Done</span>
+                          ) : m.status === "failed" ? (
+                            <span className="text-xs text-red-600 font-medium">Failed</span>
+                          ) : m.status === "running" ? (
+                            <span className="text-xs text-blue-500">Starting...</span>
+                          ) : (
+                            <span className="text-xs text-gray-400">Queued</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-right font-mono">
+                          {m.accuracy != null ? `${(m.accuracy * 100).toFixed(1)}%` : "-"}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-red-600 truncate max-w-xs">{m.error || ""}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -858,6 +925,16 @@ function FrontierContent() {
           </div>
         )}
       </section>
+
+      <ConfirmModal
+        isOpen={!!confirmState}
+        title={confirmState?.title ?? ""}
+        message={confirmState?.message ?? ""}
+        variant={confirmState?.variant}
+        onConfirm={() => confirmState?.onConfirm()}
+        onCancel={() => setConfirmState(null)}
+      />
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { apiFetch } from "../../lib/api";
 import RoleGuard from "../../components/RoleGuard";
+import ConfirmModal from "../../components/ConfirmModal";
+import Toast, { type ToastState } from "../../components/Toast";
 
 interface User {
   id: number;
@@ -54,6 +56,10 @@ function UsersContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedUser, setExpandedUser] = useState<number | null>(null);
+  const [confirmState, setConfirmState] = useState<{
+    title: string; message: string; variant?: "danger" | "default"; onConfirm: () => void;
+  } | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
 
   // Invite form
   const [inviteEmail, setInviteEmail] = useState("");
@@ -95,7 +101,7 @@ function UsersContent() {
       setInviteEmail("");
       fetchData();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to invite user");
+      setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to invite user" });
     } finally {
       setInviting(false);
     }
@@ -110,18 +116,25 @@ function UsersContent() {
       });
       fetchData();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update role");
+      setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to update role" });
     }
   };
 
-  const deleteUser = async (username: string) => {
-    if (!confirm(`Delete user ${username}?`)) return;
-    try {
-      await apiFetch(`/auth/users/${username}`, { method: "DELETE", token });
-      fetchData();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete user");
-    }
+  const deleteUser = (username: string) => {
+    setConfirmState({
+      title: "Delete User",
+      message: `Delete user ${username}?`,
+      variant: "danger",
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await apiFetch(`/auth/users/${username}`, { method: "DELETE", token });
+          fetchData();
+        } catch (err) {
+          setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to delete user" });
+        }
+      },
+    });
   };
 
   const getProfile = (userId: number) =>
@@ -218,12 +231,23 @@ function UsersContent() {
                   onDelete={deleteUser}
                   onProfileUpdated={fetchData}
                   token={token}
+                  onToast={setToast}
                 />
               );
             })}
           </tbody>
         </table>
       </div>
+
+      <ConfirmModal
+        isOpen={!!confirmState}
+        title={confirmState?.title ?? ""}
+        message={confirmState?.message ?? ""}
+        variant={confirmState?.variant}
+        onConfirm={() => confirmState?.onConfirm()}
+        onCancel={() => setConfirmState(null)}
+      />
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }
@@ -239,6 +263,7 @@ function UserRow({
   onDelete,
   onProfileUpdated,
   token,
+  onToast,
 }: {
   user: User;
   profile?: AuthorityProfile;
@@ -248,6 +273,7 @@ function UserRow({
   onDelete: (username: string) => void;
   onProfileUpdated: () => void;
   token?: string;
+  onToast: (t: ToastState) => void;
 }) {
   return (
     <>
@@ -321,6 +347,7 @@ function UserRow({
               profile={profile}
               onSaved={onProfileUpdated}
               token={token}
+              onToast={onToast}
             />
           </td>
         </tr>
@@ -336,11 +363,13 @@ function AuthorityProfileEditor({
   profile,
   onSaved,
   token,
+  onToast,
 }: {
   userId: number;
   profile?: AuthorityProfile;
   onSaved: () => void;
   token?: string;
+  onToast: (t: ToastState) => void;
 }) {
   const [expertise, setExpertise] = useState(
     profile?.expertise_domains.join(", ") || ""
@@ -394,7 +423,7 @@ function AuthorityProfileEditor({
       });
       onSaved();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save profile");
+      onToast({ type: "error", message: err instanceof Error ? err.message : "Failed to save profile" });
     } finally {
       setSaving(false);
     }
