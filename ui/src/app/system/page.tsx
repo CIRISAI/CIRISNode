@@ -31,7 +31,7 @@ function SystemContent() {
 
   const fetchHealth = useCallback(async () => {
     try {
-      const data = await apiFetch<HealthData>("/health");
+      const data = await apiFetch<HealthData>("/api/v1/health");
       setHealth(data);
       setError(null);
     } catch (err) {
