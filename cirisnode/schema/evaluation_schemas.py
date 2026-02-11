@@ -34,6 +34,11 @@ class ScoreEntry(BaseModel):
     avg_latency_ms: Optional[float] = None
     completed_at: Optional[datetime] = None
     trend: Optional[TrendInfo] = None
+    eval_count: int = 1
+    avg_accuracy: Optional[float] = None
+    min_accuracy: Optional[float] = None
+    max_accuracy: Optional[float] = None
+    stddev_accuracy: Optional[float] = None
 
 
 class ScoresResponse(BaseModel):

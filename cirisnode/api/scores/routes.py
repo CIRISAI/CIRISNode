@@ -35,32 +35,49 @@ scores_router = APIRouter(prefix="/api/v1", tags=["scores"])
 # ---------------------------------------------------------------------------
 
 SCORES_SQL = """
-    SELECT DISTINCT ON (e.target_model)
-        e.id, e.target_model, e.accuracy, e.total_scenarios, e.correct,
-        e.errors, e.categories, e.badges, e.avg_latency_ms, e.completed_at,
-        fm.display_name, fm.provider
+    SELECT
+        e.target_model,
+        fm.display_name,
+        fm.provider,
+        COUNT(*)                         AS eval_count,
+        AVG(e.accuracy)                  AS avg_accuracy,
+        MIN(e.accuracy)                  AS min_accuracy,
+        MAX(e.accuracy)                  AS max_accuracy,
+        STDDEV_SAMP(e.accuracy)          AS stddev_accuracy,
+        AVG(e.avg_latency_ms)            AS avg_latency_ms,
+        MAX(e.completed_at)              AS latest_completed_at,
+        (ARRAY_AGG(e.badges ORDER BY e.completed_at DESC))[1]      AS badges,
+        (ARRAY_AGG(e.categories ORDER BY e.completed_at DESC))[1]  AS categories,
+        (ARRAY_AGG(e.total_scenarios ORDER BY e.completed_at DESC))[1] AS total_scenarios
     FROM evaluations e
     JOIN frontier_models fm ON fm.model_id = e.target_model
     WHERE e.eval_type = 'frontier'
       AND e.status = 'completed'
       AND e.visibility = 'public'
-    ORDER BY e.target_model, e.completed_at DESC
+    GROUP BY e.target_model, fm.display_name, fm.provider
+    HAVING COUNT(*) >= 5
+    ORDER BY AVG(e.accuracy) DESC
 """
 
-PREV_ACCURACY_SQL = """
-    SELECT accuracy FROM evaluations
-    WHERE target_model = $1
-      AND eval_type = 'frontier'
-      AND status = 'completed'
-      AND visibility = 'public'
-    ORDER BY completed_at DESC
-    OFFSET 1 LIMIT 1
+TREND_SQL = """
+    WITH ranked AS (
+        SELECT accuracy, ROW_NUMBER() OVER (ORDER BY completed_at DESC) AS rn
+        FROM evaluations
+        WHERE target_model = $1
+          AND eval_type = 'frontier'
+          AND status = 'completed'
+          AND visibility = 'public'
+    )
+    SELECT
+        AVG(CASE WHEN rn <= 5 THEN accuracy END) AS recent_avg,
+        AVG(CASE WHEN rn > 5 AND rn <= 10 THEN accuracy END) AS prev_avg
+    FROM ranked WHERE rn <= 10
 """
 
 
 @scores_router.get("/scores", response_model=ScoresResponse)
 async def get_scores():
-    """Latest frontier model scores (public)."""
+    """Aggregate frontier model scores (public). Requires >= 5 evals per model."""
     cached = await cache_get("scores:frontier")
     if cached:
         return ScoresResponse(**cached)
@@ -71,13 +88,21 @@ async def get_scores():
 
         entries = []
         for row in rows:
-            # Compute trend from previous eval
+            eval_count = row["eval_count"]
+            avg_accuracy = row["avg_accuracy"]
+
+            # Compute trend only when model has >= 10 evals
             trend = None
-            prev = await conn.fetchval(PREV_ACCURACY_SQL, row["target_model"])
-            if prev is not None and row["accuracy"] is not None:
-                delta = row["accuracy"] - prev
-                direction = "up" if delta > 0.001 else ("down" if delta < -0.001 else "stable")
-                trend = TrendInfo(prev_accuracy=prev, delta=round(delta, 4), direction=direction)
+            if eval_count >= 10:
+                trend_row = await conn.fetchrow(TREND_SQL, row["target_model"])
+                if trend_row and trend_row["recent_avg"] is not None and trend_row["prev_avg"] is not None:
+                    delta = trend_row["recent_avg"] - trend_row["prev_avg"]
+                    direction = "up" if delta > 0.001 else ("down" if delta < -0.001 else "stable")
+                    trend = TrendInfo(
+                        prev_accuracy=round(trend_row["prev_avg"], 4),
+                        delta=round(delta, 4),
+                        direction=direction,
+                    )
 
             categories = row["categories"]
             if isinstance(categories, str):
@@ -91,17 +116,20 @@ async def get_scores():
                 model_id=row["target_model"],
                 display_name=row["display_name"],
                 provider=row["provider"],
-                accuracy=row["accuracy"],
+                accuracy=round(avg_accuracy, 4) if avg_accuracy else 0,
                 total_scenarios=row["total_scenarios"],
                 categories=categories,
                 badges=badges or [],
                 avg_latency_ms=row["avg_latency_ms"],
-                completed_at=row["completed_at"],
+                completed_at=row["latest_completed_at"],
                 trend=trend,
+                eval_count=eval_count,
+                avg_accuracy=round(avg_accuracy, 4) if avg_accuracy else None,
+                min_accuracy=round(row["min_accuracy"], 4) if row["min_accuracy"] else None,
+                max_accuracy=round(row["max_accuracy"], 4) if row["max_accuracy"] else None,
+                stddev_accuracy=round(row["stddev_accuracy"], 4) if row["stddev_accuracy"] else None,
             ))
 
-    # Sort by accuracy descending
-    entries.sort(key=lambda e: e.accuracy or 0, reverse=True)
     now = datetime.now(timezone.utc)
     result = ScoresResponse(scores=entries, updated_at=now)
 
