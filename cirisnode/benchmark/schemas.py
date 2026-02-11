@@ -76,3 +76,4 @@ class BatchResult(BaseModel):
     agent_card_provider: str = ""
     agent_card_did: Optional[str] = None
     agent_card_skills: List[str] = Field(default_factory=list)
+    dataset_meta: Optional[Dict[str, Any]] = None

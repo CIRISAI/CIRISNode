@@ -156,7 +156,7 @@ DETAIL_SQL = """
            concurrency, status, accuracy, total_scenarios, correct,
            errors, categories, avg_latency_ms, processing_ms,
            scenario_results, trace_id, visibility, badges,
-           created_at, started_at, completed_at
+           created_at, started_at, completed_at, dataset_meta
     FROM evaluations
     WHERE id = $1
 """
@@ -191,6 +191,10 @@ async def get_evaluation(
     if isinstance(scenario_results, str):
         scenario_results = json.loads(scenario_results)
 
+    dm = row["dataset_meta"]
+    if isinstance(dm, str):
+        dm = json.loads(dm)
+
     return EvaluationDetail(
         id=row["id"],
         tenant_id=row["tenant_id"],
@@ -218,6 +222,7 @@ async def get_evaluation(
         created_at=row["created_at"],
         started_at=row["started_at"],
         completed_at=row["completed_at"],
+        dataset_meta=dm,
     )
 
 
@@ -366,6 +371,10 @@ async def get_evaluation_report(
 
     now = datetime.now(timezone.utc)
 
+    report_dm = row["dataset_meta"]
+    if isinstance(report_dm, str):
+        report_dm = json.loads(report_dm)
+
     summary: dict[str, Any] = {
         "agent_name": row["agent_name"],
         "target_model": row["target_model"],
@@ -381,6 +390,7 @@ async def get_evaluation_report(
         "seed": row["seed"],
         "badges": badges or [],
         "categories": categories,
+        "dataset_meta": report_dm,
     }
 
     signature = sign_data(summary).hex()

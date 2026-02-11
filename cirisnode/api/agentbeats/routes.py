@@ -127,14 +127,14 @@ INSERT_EVAL_SQL = """
         concurrency, status, accuracy, total_scenarios, correct,
         errors, categories, avg_latency_ms, processing_ms,
         scenario_results, trace_id, visibility, badges,
-        created_at, started_at, completed_at
+        created_at, started_at, completed_at, dataset_meta
     ) VALUES (
         $1, $2, $3, $4, $5,
         $6, $7, $8, $9, $10,
         $11, $12, $13, $14, $15,
         $16, $17, $18, $19,
         $20, $21, $22, $23,
-        $24, $25, $26
+        $24, $25, $26, $27
     )
 """
 
@@ -188,11 +188,12 @@ async def run_agentbeats(
 
     # --- 3. Load scenarios ---
     seed = request.random_seed if request.random_seed is not None else int(uuid.uuid4().int % 2**31)
-    scenarios = load_scenarios(
+    scenarios, dataset_meta = load_scenarios(
         sample_size=request.sample_size,
         categories=request.categories,
         seed=seed,
     )
+    dataset_meta_dict = dataset_meta.to_dict()
 
     if not scenarios:
         raise HTTPException(
@@ -213,6 +214,7 @@ async def run_agentbeats(
         batch_id=batch_id,
         concurrency=request.concurrency,
         timeout_per_scenario=float(request.timeout_per_scenario),
+        dataset_meta=dataset_meta_dict,
     )
 
     # --- 5. Compute badges (only for full HE-300 runs) ---
@@ -255,6 +257,7 @@ async def run_agentbeats(
                 now,                                    # created_at
                 now,                                    # started_at
                 now,                                    # completed_at
+                json.dumps(dataset_meta_dict),           # dataset_meta (JSONB)
             )
         logger.info("Stored evaluation %s (visibility=private)", eval_id)
     except Exception:

@@ -150,6 +150,7 @@ class EvaluationDetail(BaseModel):
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    dataset_meta: Optional[dict[str, Any]] = None
 
 
 class EvaluationPatchRequest(BaseModel):

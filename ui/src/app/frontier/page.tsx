@@ -306,10 +306,18 @@ function FrontierContent() {
       const est = estimateSweepCost(m.cost_per_1m_input, m.cost_per_1m_output);
       return sum + (est || 0);
     }, 0);
-    const costStr = totalCost > 0 ? ` Estimated cost: $${totalCost.toFixed(4)}` : "";
-    if (!confirm(`Launch frontier sweep for ${label}? This runs 300 scenarios per model.${costStr}`)) return;
+    // Semantic eval adds ~300 evaluator calls per model (gpt-4o-mini: ~$0.01/model)
+    const semanticCost = selectedModels.length * 0.01;
+    const grandTotal = totalCost + semanticCost;
+    const costStr = grandTotal > 0 ? ` Estimated cost: $${grandTotal.toFixed(4)} (incl. semantic eval)` : "";
+    if (!confirm(`Launch frontier sweep for ${label}? This runs 300 scenarios per model with semantic evaluation.${costStr}`)) return;
     try {
-      const body: Record<string, unknown> = { concurrency: 50 };
+      const body: Record<string, unknown> = {
+        concurrency: 50,
+        semantic_evaluation: true,
+        evaluator_model: "gpt-4o-mini",
+        evaluator_provider: "openai",
+      };
       if (modelIds) body.model_ids = modelIds;
       const res = await apiFetch<{ sweep_id: string }>("/api/v1/admin/frontier-sweep", {
         method: "POST",

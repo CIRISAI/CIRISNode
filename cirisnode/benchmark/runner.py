@@ -1,7 +1,7 @@
 """Local HE-300 benchmark runner for CIRISNode.
 
-Adapted from CIRISBench V2 runner.  Heuristic classification only
-(semantic LLM evaluation deferred to a future release).
+Adapted from CIRISBench V2 runner.  Supports heuristic classification
+and optional semantic LLM evaluation (dual-eval with disagreement tracking).
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import asyncio
 import logging
 import ssl
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,8 +29,18 @@ from cirisnode.benchmark.schemas import (
     ScenarioInput,
     ScenarioResult,
 )
+from cirisnode.benchmark.semantic_evaluator import semantic_classify
 
 logger = logging.getLogger(__name__)
+
+
+# Dataclass for semantic evaluator config
+@dataclass
+class SemanticEvalConfig:
+    """Configuration for the semantic LLM evaluator."""
+    evaluator_base_url: str
+    evaluator_model: str
+    evaluator_api_key: str
 
 
 # ---------------------------------------------------------------------------
@@ -119,8 +130,10 @@ async def evaluate_scenario(
     client: httpx.AsyncClient,
     batch_id: str = "",
     scenario_index: int = 0,
+    semantic_config: Optional[SemanticEvalConfig] = None,
+    semantic_client: Optional[httpx.AsyncClient] = None,
 ) -> ScenarioResult:
-    """Evaluate a single scenario using protocol adapters + heuristic classification."""
+    """Evaluate a single scenario using protocol adapters + heuristic + optional semantic."""
     start_time = time.time()
     trace_id = f"{batch_id}-scenario-{scenario_index}" if batch_id else None
 
@@ -157,9 +170,48 @@ async def evaluate_scenario(
         method="heuristic",
     )
 
-    final_label = heuristic_label
-    final_classification = heuristic_class
-    final_confidence = heuristic_conf
+    # Optional semantic LLM evaluation
+    semantic_eval_detail: Optional[EvalDetail] = None
+    if semantic_config and semantic_client:
+        sem_class, sem_conf, sem_error = await semantic_classify(
+            scenario_text=scenario.input_text,
+            agent_response=agent_response,
+            category=scenario.category,
+            evaluator_base_url=semantic_config.evaluator_base_url,
+            evaluator_model=semantic_config.evaluator_model,
+            evaluator_api_key=semantic_config.evaluator_api_key,
+            client=semantic_client,
+        )
+        if sem_error:
+            logger.debug("[SEMANTIC] Error for %s: %s", scenario.scenario_id, sem_error)
+        if sem_class:
+            sem_label = _classification_to_label(sem_class, scenario.category)
+            semantic_eval_detail = EvalDetail(
+                classification=sem_class,
+                label=sem_label,
+                confidence=sem_conf,
+                method="semantic",
+            )
+
+    # Determine final label — prefer semantic if available
+    evaluations_agree = True
+    disagreement_note = None
+
+    if semantic_eval_detail and semantic_eval_detail.label is not None:
+        final_label = semantic_eval_detail.label
+        final_classification = semantic_eval_detail.classification
+        final_confidence = semantic_eval_detail.confidence
+        # Track disagreement
+        if heuristic_label is not None and heuristic_label != semantic_eval_detail.label:
+            evaluations_agree = False
+            disagreement_note = (
+                f"Heuristic={heuristic_class}({heuristic_conf:.2f}) "
+                f"vs Semantic={semantic_eval_detail.classification}({semantic_eval_detail.confidence:.2f})"
+            )
+    else:
+        final_label = heuristic_label
+        final_classification = heuristic_class
+        final_confidence = heuristic_conf
 
     is_correct = final_label == scenario.expected_label if final_label is not None else False
     latency_ms = (time.time() - start_time) * 1000
@@ -175,9 +227,9 @@ async def evaluate_scenario(
         is_correct=is_correct,
         agent_response=agent_response,
         heuristic_eval=heuristic_eval,
-        semantic_eval=None,
-        evaluations_agree=True,
-        disagreement_note=None,
+        semantic_eval=semantic_eval_detail,
+        evaluations_agree=evaluations_agree,
+        disagreement_note=disagreement_note,
         latency_ms=latency_ms,
         trace_id=trace_id,
     )
@@ -214,16 +266,20 @@ async def run_batch(
     batch_id: str,
     concurrency: int = 50,
     timeout_per_scenario: float = 60.0,
+    dataset_meta: Optional[Dict[str, Any]] = None,
+    semantic_config: Optional[SemanticEvalConfig] = None,
 ) -> BatchResult:
     """Run HE-300 benchmark batch with parallel execution.
 
-    Uses heuristic classification only (no semantic LLM).
+    Supports heuristic + optional semantic LLM dual evaluation.
     """
     start_time = time.time()
 
     # Optional discovery
     adapter = get_adapter(agent_spec.protocol)
     logger.info("[RUNNER] Protocol adapter: %s -> %s", agent_spec.protocol, type(adapter).__name__)
+    if semantic_config:
+        logger.info("[RUNNER] Semantic evaluation enabled: model=%s", semantic_config.evaluator_model)
 
     ssl_context = (
         _build_ssl_context(agent_spec) if agent_spec.tls.verify_ssl else False
@@ -236,18 +292,37 @@ async def run_batch(
         logger.info("[RUNNER] Agent card discovered: name=%s", agent_card_data.get("name", "?"))
 
     semaphore = asyncio.Semaphore(concurrency)
+    # Limit semantic eval concurrency to avoid flooding the evaluator API
+    sem_eval_semaphore = asyncio.Semaphore(min(concurrency, 20)) if semantic_config else None
     completed_count = 0
 
-    async def _eval(scenario: ScenarioInput, idx: int, client: httpx.AsyncClient) -> ScenarioResult:
+    async def _eval(
+        scenario: ScenarioInput,
+        idx: int,
+        client: httpx.AsyncClient,
+        sem_client: Optional[httpx.AsyncClient],
+    ) -> ScenarioResult:
         nonlocal completed_count
         async with semaphore:
-            result = await evaluate_scenario(
-                scenario=scenario,
-                agent_spec=agent_spec,
-                client=client,
-                batch_id=batch_id,
-                scenario_index=idx,
-            )
+            if semantic_config and sem_eval_semaphore:
+                async with sem_eval_semaphore:
+                    result = await evaluate_scenario(
+                        scenario=scenario,
+                        agent_spec=agent_spec,
+                        client=client,
+                        batch_id=batch_id,
+                        scenario_index=idx,
+                        semantic_config=semantic_config,
+                        semantic_client=sem_client,
+                    )
+            else:
+                result = await evaluate_scenario(
+                    scenario=scenario,
+                    agent_spec=agent_spec,
+                    client=client,
+                    batch_id=batch_id,
+                    scenario_index=idx,
+                )
         completed_count += 1
         total = len(scenarios)
         if completed_count % 25 == 0 or completed_count == total:
@@ -260,8 +335,13 @@ async def run_batch(
     logger.info("[RUNNER] Dispatching %d scenarios (concurrency=%d)...", len(scenarios), concurrency)
     results: list = []
     async with httpx.AsyncClient(verify=ssl_context) as client:
-        tasks = [_eval(s, i, client) for i, s in enumerate(scenarios)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        sem_client = httpx.AsyncClient() if semantic_config else None
+        try:
+            tasks = [_eval(s, i, client, sem_client) for i, s in enumerate(scenarios)]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            if sem_client:
+                await sem_client.aclose()
 
     processed: List[ScenarioResult] = []
     for idx, result in enumerate(results):
@@ -371,4 +451,5 @@ async def run_batch(
         agent_card_provider=ac_provider,
         agent_card_did=ac_did,
         agent_card_skills=ac_skills,
+        dataset_meta=dataset_meta,
     )

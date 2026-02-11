@@ -33,7 +33,7 @@ from cirisnode.benchmark.agent_spec import (
 )
 from cirisnode.benchmark.badges import compute_badges
 from cirisnode.benchmark.loader import load_scenarios
-from cirisnode.benchmark.runner import run_batch
+from cirisnode.benchmark.runner import SemanticEvalConfig, run_batch
 from cirisnode.config import settings
 from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.utils.log_buffer import get_log_buffer
@@ -88,14 +88,14 @@ INSERT_EVAL_SQL = """
         concurrency, status, accuracy, total_scenarios, correct,
         errors, categories, avg_latency_ms, processing_ms,
         scenario_results, trace_id, visibility, badges,
-        created_at, started_at, completed_at
+        created_at, started_at, completed_at, dataset_meta
     ) VALUES (
         $1, $2, $3, $4, $5,
         $6, $7, $8, $9, $10,
         $11, $12, $13, $14, $15,
         $16, $17, $18, $19,
         $20, $21, $22, $23,
-        $24, $25, $26
+        $24, $25, $26, $27
     )
 """
 
@@ -111,7 +111,8 @@ UPDATE_EVAL_COMPLETED_SQL = """
         processing_ms = $8,
         scenario_results = $9,
         badges = $10,
-        completed_at = $11
+        completed_at = $11,
+        dataset_meta = $12
     WHERE id = $1
 """
 
@@ -192,6 +193,9 @@ class FrontierSweepRequest(BaseModel):
     model_ids: Optional[List[str]] = Field(None, description="Specific models to sweep (None = all)")
     concurrency: int = Field(default=50, ge=1, le=100, description="Per-model concurrency")
     random_seed: Optional[int] = Field(None, description="Random seed for reproducibility")
+    semantic_evaluation: bool = Field(default=True, description="Enable semantic LLM evaluation (default: true)")
+    evaluator_model: str = Field(default="gpt-4o-mini", description="Model to use for semantic evaluation")
+    evaluator_provider: str = Field(default="openai", description="Provider for evaluator model")
 
 
 class SweepModelStatus(BaseModel):
@@ -410,7 +414,8 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
     seed = body.random_seed if body.random_seed is not None else int(uuid.uuid4().int % 2**31)
 
     # Load scenarios once (shared across all models)
-    scenarios = load_scenarios(sample_size=300, seed=seed)
+    scenarios, dataset_meta = load_scenarios(sample_size=300, seed=seed)
+    dataset_meta_dict = dataset_meta.to_dict()
 
     # Pre-insert pending evaluation rows
     now = datetime.now(timezone.utc)
@@ -447,6 +452,39 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
                 now,                                        # created_at
                 None,                                       # started_at
                 None,                                       # completed_at
+                json.dumps(dataset_meta_dict),               # dataset_meta
+            )
+
+    # Build semantic evaluator config if enabled
+    semantic_config: Optional[SemanticEvalConfig] = None
+    if body.semantic_evaluation:
+        eval_provider = body.evaluator_provider.lower()
+        eval_api_key = api_keys.get(eval_provider)
+        if eval_api_key:
+            # Map provider to base URL
+            _PROVIDER_URLS = {
+                "openai": "https://api.openai.com/v1",
+                "anthropic": "https://api.anthropic.com/v1",
+                "openrouter": "https://openrouter.ai/api/v1",
+                "together": "https://api.together.xyz/v1",
+                "groq": "https://api.groq.com/openai/v1",
+                "google": "https://generativelanguage.googleapis.com/v1beta/openai",
+                "grok": "https://api.x.ai/v1",
+            }
+            eval_base_url = _PROVIDER_URLS.get(eval_provider, "https://api.openai.com/v1")
+            semantic_config = SemanticEvalConfig(
+                evaluator_base_url=eval_base_url,
+                evaluator_model=body.evaluator_model,
+                evaluator_api_key=eval_api_key,
+            )
+            logger.info(
+                "[SWEEP] Semantic evaluation enabled: model=%s, provider=%s",
+                body.evaluator_model, eval_provider,
+            )
+        else:
+            logger.warning(
+                "[SWEEP] Semantic evaluation requested but no API key for provider '%s'",
+                eval_provider,
             )
 
     # Register sweep control state
@@ -462,6 +500,8 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
             api_keys=api_keys,
             concurrency=body.concurrency,
             seed=seed,
+            dataset_meta_dict=dataset_meta_dict,
+            semantic_config=semantic_config,
         )
     )
 
@@ -673,6 +713,8 @@ async def _execute_sweep(
     api_keys: Dict[str, str],
     concurrency: int,
     seed: int,
+    dataset_meta_dict: Optional[Dict[str, Any]] = None,
+    semantic_config: Optional[SemanticEvalConfig] = None,
 ) -> None:
     """Run benchmark for each model with per-provider + global rate limiting."""
     global_sem = asyncio.Semaphore(GLOBAL_CONCURRENCY)
@@ -728,6 +770,8 @@ async def _execute_sweep(
                         agent_spec=agent_spec,
                         batch_id=batch_id,
                         concurrency=concurrency,
+                        dataset_meta=dataset_meta_dict,
+                        semantic_config=semantic_config,
                     )
 
             badges = compute_badges(batch_result.accuracy, batch_result.categories)
@@ -747,6 +791,7 @@ async def _execute_sweep(
                     json.dumps(batch_result.results),
                     json.dumps(badges),
                     completed_at,
+                    json.dumps(dataset_meta_dict) if dataset_meta_dict else None,
                 )
 
             logger.info(
