@@ -364,7 +364,7 @@ class OpenAIAdapter(ProtocolAdapter):
         # Reasoning models (o-series) don't support temperature and use
         # max_completion_tokens instead of max_tokens
         if cfg.reasoning_effort:
-            body["reasoning"] = {"effort": cfg.reasoning_effort}
+            body["reasoning_effort"] = cfg.reasoning_effort
             body["max_completion_tokens"] = cfg.max_tokens
         else:
             body["temperature"] = cfg.temperature
