@@ -76,8 +76,11 @@ GLOBAL_CONCURRENCY = 3
 
 # Map model providers to API key provider names when they differ
 KEY_PROVIDER_ALIASES: Dict[str, str] = {
-    "xai": "grok",        # xAI models use the "grok" API key
-    "meta": "openrouter",  # Meta/Llama models route through OpenRouter
+    "xai": "grok",          # xAI models use the "grok" API key
+    "meta": "openrouter",    # Meta/Llama models route through OpenRouter
+    "deepseek": "openrouter", # DeepSeek via OpenRouter
+    "mistral": "openrouter",  # Mistral via OpenRouter
+    "cohere": "openrouter",   # Cohere via OpenRouter
 }
 
 # Providers that use native APIs (not OpenAI-compatible)
@@ -410,11 +413,12 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
             detail="No frontier models registered",
         )
 
-    # Validate API keys exist for each model's provider
+    # Validate API keys exist for each model's provider (with alias support)
     models_to_run = []
     for row in rows:
         provider_key = row["provider"].lower()
-        if provider_key not in api_keys:
+        key_provider = KEY_PROVIDER_ALIASES.get(provider_key, provider_key)
+        if key_provider not in api_keys:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"No API key for provider '{row['provider']}' (model: {row['model_id']}). "
