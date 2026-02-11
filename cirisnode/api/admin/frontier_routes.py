@@ -28,7 +28,10 @@ from pydantic import BaseModel, Field
 
 from cirisnode.benchmark.agent_spec import (
     AgentSpec,
+    AnthropicProtocolConfig,
+    ApiKeyAuth,
     BearerAuth,
+    GeminiProtocolConfig,
     OpenAIProtocolConfig,
 )
 from cirisnode.benchmark.badges import compute_badges
@@ -70,6 +73,16 @@ def _load_api_keys() -> Dict[str, str]:
 PROVIDER_CONCURRENCY = 1
 # Max total parallel model runs across all providers
 GLOBAL_CONCURRENCY = 3
+
+# Map model providers to API key provider names when they differ
+KEY_PROVIDER_ALIASES: Dict[str, str] = {
+    "xai": "grok",        # xAI models use the "grok" API key
+    "meta": "openrouter",  # Meta/Llama models route through OpenRouter
+}
+
+# Providers that use native APIs (not OpenAI-compatible)
+ANTHROPIC_PROVIDERS = frozenset({"anthropic"})
+GEMINI_PROVIDERS = frozenset({"google"})
 
 # {sweep_id: {"status": "running"|"paused"|"cancelled"}}
 _sweep_controls: Dict[str, Dict[str, str]] = {}
@@ -729,7 +742,8 @@ async def _execute_sweep(
         model_id = model["model_id"]
         eval_id = eval_ids[model_id]
         provider_key = model["provider"].lower()
-        api_key = api_keys[provider_key]
+        key_provider = KEY_PROVIDER_ALIASES.get(provider_key, provider_key)
+        api_key = api_keys[key_provider]
         prov_sem = provider_sems[provider_key]
 
         # Wait while paused, bail if cancelled
@@ -746,18 +760,41 @@ async def _execute_sweep(
 
             model_name = model.get("default_model_name") or model_id
             reasoning_effort = model.get("reasoning_effort")
-            agent_spec = AgentSpec(
-                name=model.get("display_name", model_id),
-                url=model["api_base_url"],
-                protocol_config=OpenAIProtocolConfig(
-                    protocol="openai",
+
+            # Build provider-specific protocol config + auth
+            if provider_key in ANTHROPIC_PROVIDERS:
+                protocol_config = AnthropicProtocolConfig(
+                    model=model_name,
+                    system_prompt=BENCHMARK_SYSTEM_PROMPT,
+                    temperature=0.0,
+                    max_tokens=512,
+                )
+                auth = ApiKeyAuth(auth_type="api_key", key=api_key, header_name="x-api-key")
+            elif provider_key in GEMINI_PROVIDERS:
+                protocol_config = GeminiProtocolConfig(
+                    model=model_name,
+                    system_prompt=BENCHMARK_SYSTEM_PROMPT,
+                    temperature=0.0,
+                    max_tokens=512,
+                )
+                # Gemini uses API key in URL query param, handled by adapter
+                auth = ApiKeyAuth(auth_type="api_key", key=api_key, header_name="x-goog-api-key")
+            else:
+                # OpenAI-compatible (OpenAI, xAI/Grok, OpenRouter, Together, Groq)
+                protocol_config = OpenAIProtocolConfig(
                     model=model_name,
                     system_prompt=BENCHMARK_SYSTEM_PROMPT,
                     temperature=0.0,
                     max_tokens=512,
                     reasoning_effort=reasoning_effort,
-                ),
-                auth=BearerAuth(auth_type="bearer", token=api_key),
+                )
+                auth = BearerAuth(auth_type="bearer", token=api_key)
+
+            agent_spec = AgentSpec(
+                name=model.get("display_name", model_id),
+                url=model["api_base_url"],
+                protocol_config=protocol_config,
+                auth=auth,
             )
 
             batch_id = f"{sweep_id}/{model_id}"

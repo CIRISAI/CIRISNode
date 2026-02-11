@@ -170,10 +170,7 @@ async def evaluate_scenario(
     # Build composite prompt for trace (what the agent actually sees).
     # The system prompt lives on the AgentSpec; the category prompt is the
     # user-message "question"; the scenario text is injected by the adapter.
-    from cirisnode.benchmark.agent_spec import OpenAIProtocolConfig
-    sys_prompt = ""
-    if isinstance(agent_spec.protocol_config, OpenAIProtocolConfig):
-        sys_prompt = agent_spec.protocol_config.system_prompt or ""
+    sys_prompt = getattr(agent_spec.protocol_config, "system_prompt", None) or ""
     composite_prompt = (
         f"[SYSTEM] {sys_prompt}\n\n"
         f"[USER] Scenario: {scenario.input_text}\n\n"

@@ -18,8 +18,10 @@ import httpx
 from cirisnode.benchmark.agent_spec import (
     A2AProtocolConfig,
     AgentSpec,
+    AnthropicProtocolConfig,
     ApiKeyAuth,
     BearerAuth,
+    GeminiProtocolConfig,
     MCPProtocolConfig,
     OpenAIProtocolConfig,
     RESTProtocolConfig,
@@ -368,6 +370,174 @@ class OpenAIAdapter(ProtocolAdapter):
 
 
 # ---------------------------------------------------------------------------
+# Anthropic Messages API Adapter
+# ---------------------------------------------------------------------------
+
+class AnthropicAdapter(ProtocolAdapter):
+    """Native Anthropic Messages API adapter.
+
+    Uses /v1/messages endpoint with x-api-key auth instead of
+    OpenAI-compatible /chat/completions.
+    """
+
+    async def send_scenario(
+        self,
+        scenario_id: str,
+        scenario_text: str,
+        question: str,
+        agent_spec: AgentSpec,
+        client: httpx.AsyncClient,
+    ) -> Tuple[str, Optional[str]]:
+        cfg = agent_spec.protocol_config
+        assert isinstance(cfg, AnthropicProtocolConfig)
+
+        url = agent_spec.url.rstrip("/") + "/messages"
+
+        body: Dict[str, Any] = {
+            "model": cfg.model,
+            "max_tokens": cfg.max_tokens,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"Scenario: {scenario_text}\n\nQuestion: {question}",
+                },
+            ],
+        }
+        if cfg.system_prompt:
+            body["system"] = cfg.system_prompt
+        if cfg.temperature > 0:
+            body["temperature"] = cfg.temperature
+
+        # Anthropic uses x-api-key, not Bearer token
+        api_key = ""
+        auth = agent_spec.auth
+        if isinstance(auth, BearerAuth):
+            api_key = auth.token
+        elif isinstance(auth, ApiKeyAuth):
+            api_key = auth.key
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        }
+
+        try:
+            response = await client.post(
+                url,
+                json=body,
+                headers=headers,
+                timeout=agent_spec.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            content = data.get("content", [])
+            if content and isinstance(content, list):
+                text_parts = [
+                    block.get("text", "")
+                    for block in content
+                    if block.get("type") == "text"
+                ]
+                return "".join(text_parts), None
+            return "", "No content in Anthropic response"
+        except httpx.HTTPStatusError as e:
+            err = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+            logger.warning("[ANTHROPIC] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
+            return "", err
+        except httpx.RequestError as e:
+            err = f"Request failed: {str(e)}"
+            logger.warning("[ANTHROPIC] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
+            return "", err
+        except Exception as e:
+            err = f"Unexpected error: {str(e)}"
+            logger.warning("[ANTHROPIC] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
+            return "", err
+
+
+# ---------------------------------------------------------------------------
+# Google Gemini generateContent API Adapter
+# ---------------------------------------------------------------------------
+
+class GeminiAdapter(ProtocolAdapter):
+    """Native Google Gemini generateContent API adapter.
+
+    Uses /v1beta/models/{model}:generateContent with API key auth.
+    """
+
+    async def send_scenario(
+        self,
+        scenario_id: str,
+        scenario_text: str,
+        question: str,
+        agent_spec: AgentSpec,
+        client: httpx.AsyncClient,
+    ) -> Tuple[str, Optional[str]]:
+        cfg = agent_spec.protocol_config
+        assert isinstance(cfg, GeminiProtocolConfig)
+
+        # Gemini API: POST /v1beta/models/{model}:generateContent?key={API_KEY}
+        api_key = ""
+        auth = agent_spec.auth
+        if isinstance(auth, BearerAuth):
+            api_key = auth.token
+        elif isinstance(auth, ApiKeyAuth):
+            api_key = auth.key
+
+        base = agent_spec.url.rstrip("/")
+        url = f"{base}/models/{cfg.model}:generateContent?key={api_key}"
+
+        body: Dict[str, Any] = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": f"Scenario: {scenario_text}\n\nQuestion: {question}"},
+                    ],
+                },
+            ],
+            "generationConfig": {
+                "temperature": cfg.temperature,
+                "maxOutputTokens": cfg.max_tokens,
+            },
+        }
+        if cfg.system_prompt:
+            body["system_instruction"] = {
+                "parts": [{"text": cfg.system_prompt}],
+            }
+
+        headers = {"Content-Type": "application/json"}
+
+        try:
+            response = await client.post(
+                url,
+                json=body,
+                headers=headers,
+                timeout=agent_spec.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            candidates = data.get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                text_parts = [p.get("text", "") for p in parts if "text" in p]
+                return "".join(text_parts), None
+            return "", "No candidates in Gemini response"
+        except httpx.HTTPStatusError as e:
+            err = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+            logger.warning("[GEMINI] %s model=%s: %s", scenario_id, cfg.model, err)
+            return "", err
+        except httpx.RequestError as e:
+            err = f"Request failed: {str(e)}"
+            logger.warning("[GEMINI] %s model=%s: %s", scenario_id, cfg.model, err)
+            return "", err
+        except Exception as e:
+            err = f"Unexpected error: {str(e)}"
+            logger.warning("[GEMINI] %s model=%s: %s", scenario_id, cfg.model, err)
+            return "", err
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -376,6 +546,8 @@ _ADAPTERS: Dict[str, type[ProtocolAdapter]] = {
     "mcp": MCPAdapter,
     "rest": RESTAdapter,
     "openai": OpenAIAdapter,
+    "anthropic": AnthropicAdapter,
+    "gemini": GeminiAdapter,
 }
 
 

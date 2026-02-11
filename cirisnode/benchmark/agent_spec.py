@@ -27,6 +27,7 @@ class ProtocolType(str, Enum):
     MCP = "mcp"
     REST = "rest"
     OPENAI = "openai"
+    ANTHROPIC = "anthropic"
 
 
 class AuthType(str, Enum):
@@ -183,12 +184,48 @@ class OpenAIProtocolConfig(BaseModel):
     )
 
 
+class AnthropicProtocolConfig(BaseModel):
+    """Anthropic Messages API configuration."""
+    protocol: Literal["anthropic"] = "anthropic"
+    model: str = Field(
+        ..., description="Model name (e.g. 'claude-sonnet-4-5-20250929')"
+    )
+    system_prompt: Optional[str] = Field(
+        None, description="System message"
+    )
+    temperature: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Sampling temperature"
+    )
+    max_tokens: int = Field(
+        default=256, ge=1, le=16384, description="Maximum tokens in response"
+    )
+
+
+class GeminiProtocolConfig(BaseModel):
+    """Google Gemini generateContent API configuration."""
+    protocol: Literal["gemini"] = "gemini"
+    model: str = Field(
+        ..., description="Model name (e.g. 'gemini-2.0-flash')"
+    )
+    system_prompt: Optional[str] = Field(
+        None, description="System instruction"
+    )
+    temperature: float = Field(
+        default=0.0, ge=0.0, le=2.0, description="Sampling temperature"
+    )
+    max_tokens: int = Field(
+        default=256, ge=1, le=16384, description="Maximum output tokens"
+    )
+
+
 ProtocolConfig = Annotated[
     Union[
         A2AProtocolConfig,
         MCPProtocolConfig,
         RESTProtocolConfig,
         OpenAIProtocolConfig,
+        AnthropicProtocolConfig,
+        GeminiProtocolConfig,
     ],
     Field(discriminator="protocol"),
 ]
