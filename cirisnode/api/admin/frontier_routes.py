@@ -634,6 +634,33 @@ async def cancel_sweep(sweep_id: str):
     return {"sweep_id": sweep_id, "control_status": "cancelled"}
 
 
+@frontier_router.delete("/frontier-sweep/{sweep_id}")
+async def delete_sweep(sweep_id: str):
+    """Delete all evaluation rows for a sweep. Irreversible."""
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM evaluations WHERE trace_id LIKE $1",
+            f"{sweep_id}/%",
+        )
+        if not count:
+            raise HTTPException(status_code=404, detail=f"Sweep '{sweep_id}' not found")
+        await conn.execute(
+            "DELETE FROM evaluations WHERE trace_id LIKE $1",
+            f"{sweep_id}/%",
+        )
+    # Clean up in-memory control state
+    _sweep_controls.pop(sweep_id, None)
+    # Invalidate caches
+    try:
+        r = await get_redis()
+        await r.delete("cache:scores:frontier", "cache:embed:scores")
+    except Exception:
+        pass
+    logger.info("[SWEEP] Deleted sweep %s (%d evaluations)", sweep_id, count)
+    return {"deleted": sweep_id, "evaluations_removed": count}
+
+
 # ---------------------------------------------------------------------------
 # Background sweep execution
 # ---------------------------------------------------------------------------

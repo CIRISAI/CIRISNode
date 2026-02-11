@@ -336,6 +336,17 @@ function FrontierContent() {
     }
   };
 
+  const deleteSweep = async (sweepId: string) => {
+    if (!confirm(`Delete sweep ${sweepId} and all its evaluation data? This cannot be undone.`)) return;
+    try {
+      await apiFetch(`/api/v1/admin/frontier-sweep/${sweepId}`, { method: "DELETE", token });
+      if (activeSweep?.sweep_id === sweepId) setActiveSweep(null);
+      fetchData();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete sweep");
+    }
+  };
+
   // Auto-fill pricing when model_id matches known models
   const handleModelIdChange = (value: string) => {
     const pricing = MODEL_PRICING[value];
@@ -745,12 +756,18 @@ function FrontierContent() {
                     <td className="px-4 py-3 text-sm text-gray-500">
                       {s.started_at ? new Date(s.started_at).toLocaleString() : "-"}
                     </td>
-                    <td className="px-4 py-3 text-sm">
+                    <td className="px-4 py-3 text-sm space-x-3">
                       <button
                         onClick={() => viewSweep(s.sweep_id)}
                         className="text-indigo-600 hover:text-indigo-800"
                       >
                         View
+                      </button>
+                      <button
+                        onClick={() => deleteSweep(s.sweep_id)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        Delete
                       </button>
                     </td>
                   </tr>
