@@ -160,11 +160,16 @@ Admin endpoints for running HE-300 benchmarks across frontier LLMs.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/v1/admin/frontier-keys` | List configured API key providers (masked previews) |
-| POST | `/api/v1/admin/frontier-models` | Register/update a model |
+| GET | `/api/v1/admin/logs` | Node application logs (ring buffer, filterable) |
+| POST | `/api/v1/admin/frontier-models` | Register/update a model (with cost + reasoning fields) |
 | GET | `/api/v1/admin/frontier-models` | List registered models |
 | DELETE | `/api/v1/admin/frontier-models/{model_id}` | Remove a model |
 | POST | `/api/v1/admin/frontier-sweep` | Launch sweep (always 300 scenarios) |
 | GET | `/api/v1/admin/frontier-sweep/{sweep_id}` | Sweep progress |
+| GET | `/api/v1/admin/frontier-sweep/{sweep_id}/stream` | SSE progress stream |
+| POST | `/api/v1/admin/frontier-sweep/{sweep_id}/pause` | Pause a running sweep |
+| POST | `/api/v1/admin/frontier-sweep/{sweep_id}/resume` | Resume a paused sweep |
+| POST | `/api/v1/admin/frontier-sweep/{sweep_id}/cancel` | Cancel a sweep |
 | GET | `/api/v1/admin/frontier-sweeps` | List recent sweeps |
 
 ### Setting Up Frontier API Keys
@@ -202,9 +207,29 @@ curl https://node.ciris.ai/api/v1/admin/frontier-sweep/sweep-abc12345 \
 - Only full HE-300 runs (300 scenarios) are stored as frontier evals
 - Results are `visibility='public'` and appear on the scores page
 - Scenarios loaded once with shared seed for cross-model comparability
-- Models run with bounded parallelism (2 concurrent) to avoid rate limits
+- Models run with bounded parallelism (1 per provider, 3 global) to avoid rate limits
+- SSE streaming via `GET /frontier-sweep/{id}/stream` (fetch+ReadableStream, not EventSource)
+- Pause/resume/cancel controls via in-memory `_sweep_controls` dict
 - Redis caches (`scores:frontier`, `embed:scores`, per-model) invalidated after sweep
 - Progress tracked via `evaluations` rows where `trace_id LIKE '{sweep_id}/%'`
+
+### Cost Estimation
+
+- Models store `cost_per_1m_input` and `cost_per_1m_output` (USD per 1M tokens)
+- UI estimates sweep cost: 300 scenarios * ~150 input + ~100 output tokens each
+- Known model pricing auto-fills when adding models in the UI
+
+### Reasoning Effort
+
+- Models can be flagged `supports_reasoning=true` with `reasoning_effort` (low/medium/high)
+- For o-series models (o3, o3-mini, o4-mini), passes `{"reasoning": {"effort": value}}` in API call
+- Reasoning models skip `temperature` and use `max_completion_tokens` instead of `max_tokens`
+
+### Node Logs
+
+- In-memory ring buffer (2000 entries) attached to root Python logger
+- `GET /api/v1/admin/logs?level=ERROR&pattern=SWEEP&limit=200`
+- UI panel with level filter, pattern search, and 5s auto-refresh
 
 ## Admin UI (Next.js)
 

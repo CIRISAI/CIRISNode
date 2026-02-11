@@ -178,6 +178,9 @@ class OpenAIProtocolConfig(BaseModel):
     api_version: Optional[str] = Field(
         None, description="API version (for Azure OpenAI)"
     )
+    reasoning_effort: Optional[str] = Field(
+        None, description="Reasoning effort for o-series models: 'low', 'medium', 'high'"
+    )
 
 
 ProtocolConfig = Annotated[

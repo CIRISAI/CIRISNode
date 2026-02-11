@@ -36,6 +36,7 @@ from cirisnode.benchmark.loader import load_scenarios
 from cirisnode.benchmark.runner import run_batch
 from cirisnode.config import settings
 from cirisnode.db.pg_pool import get_pg_pool
+from cirisnode.utils.log_buffer import get_log_buffer
 from cirisnode.utils.rbac import require_role
 from cirisnode.utils.redis_cache import cache_set, get_redis
 
@@ -148,12 +149,30 @@ async def list_frontier_keys():
     return result
 
 
+@frontier_router.get("/logs")
+async def get_node_logs(
+    limit: int = 200,
+    level: Optional[str] = None,
+    pattern: Optional[str] = None,
+):
+    """Return recent CIRISNode application logs from in-memory ring buffer."""
+    buf = get_log_buffer()
+    if buf is None:
+        return {"logs": [], "total": 0}
+    logs = buf.get_logs(limit=min(limit, 1000), level=level, pattern=pattern)
+    return {"logs": logs, "total": len(logs)}
+
+
 class FrontierModelCreate(BaseModel):
     model_id: str = Field(..., description="Unique model identifier (e.g. 'gpt-4o')")
     display_name: str = Field(..., description="Human-readable name")
     provider: str = Field(..., description="Provider name (e.g. 'OpenAI')")
     api_base_url: str = Field(default="https://api.openai.com/v1", description="API base URL")
     default_model_name: Optional[str] = Field(None, description="Model name for API calls (defaults to model_id)")
+    cost_per_1m_input: Optional[float] = Field(None, description="Cost per 1M input tokens (USD)")
+    cost_per_1m_output: Optional[float] = Field(None, description="Cost per 1M output tokens (USD)")
+    supports_reasoning: bool = Field(default=False, description="Whether model supports reasoning effort")
+    reasoning_effort: Optional[str] = Field(None, description="Reasoning effort: low, medium, high")
 
 
 class FrontierModelResponse(BaseModel):
@@ -162,6 +181,10 @@ class FrontierModelResponse(BaseModel):
     provider: str
     api_base_url: str
     default_model_name: Optional[str] = None
+    cost_per_1m_input: Optional[float] = None
+    cost_per_1m_output: Optional[float] = None
+    supports_reasoning: bool = False
+    reasoning_effort: Optional[str] = None
     created_at: Optional[datetime] = None
 
 
@@ -209,18 +232,30 @@ class SweepLaunchResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 UPSERT_MODEL_SQL = """
-    INSERT INTO frontier_models (model_id, display_name, provider, api_base_url, default_model_name, created_at)
-    VALUES ($1, $2, $3, $4, $5, now())
+    INSERT INTO frontier_models (
+        model_id, display_name, provider, api_base_url, default_model_name,
+        cost_per_1m_input, cost_per_1m_output, supports_reasoning, reasoning_effort,
+        created_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
     ON CONFLICT (model_id) DO UPDATE SET
         display_name = EXCLUDED.display_name,
         provider = EXCLUDED.provider,
         api_base_url = EXCLUDED.api_base_url,
-        default_model_name = EXCLUDED.default_model_name
-    RETURNING model_id, display_name, provider, api_base_url, default_model_name, created_at
+        default_model_name = EXCLUDED.default_model_name,
+        cost_per_1m_input = EXCLUDED.cost_per_1m_input,
+        cost_per_1m_output = EXCLUDED.cost_per_1m_output,
+        supports_reasoning = EXCLUDED.supports_reasoning,
+        reasoning_effort = EXCLUDED.reasoning_effort
+    RETURNING model_id, display_name, provider, api_base_url, default_model_name,
+              cost_per_1m_input, cost_per_1m_output, supports_reasoning, reasoning_effort,
+              created_at
 """
 
 LIST_MODELS_SQL = """
-    SELECT model_id, display_name, provider, api_base_url, default_model_name, created_at
+    SELECT model_id, display_name, provider, api_base_url, default_model_name,
+           cost_per_1m_input, cost_per_1m_output, supports_reasoning, reasoning_effort,
+           created_at
     FROM frontier_models ORDER BY created_at
 """
 
@@ -239,6 +274,10 @@ async def register_frontier_model(body: FrontierModelCreate):
             body.provider,
             body.api_base_url,
             body.default_model_name or body.model_id,
+            body.cost_per_1m_input,
+            body.cost_per_1m_output,
+            body.supports_reasoning,
+            body.reasoning_effort,
         )
     return FrontierModelResponse(
         model_id=row["model_id"],
@@ -246,6 +285,10 @@ async def register_frontier_model(body: FrontierModelCreate):
         provider=row["provider"],
         api_base_url=row["api_base_url"],
         default_model_name=row["default_model_name"],
+        cost_per_1m_input=float(row["cost_per_1m_input"]) if row["cost_per_1m_input"] is not None else None,
+        cost_per_1m_output=float(row["cost_per_1m_output"]) if row["cost_per_1m_output"] is not None else None,
+        supports_reasoning=row["supports_reasoning"] or False,
+        reasoning_effort=row["reasoning_effort"],
         created_at=row["created_at"],
     )
 
@@ -263,6 +306,10 @@ async def list_frontier_models():
             provider=r["provider"],
             api_base_url=r["api_base_url"],
             default_model_name=r["default_model_name"],
+            cost_per_1m_input=float(r["cost_per_1m_input"]) if r["cost_per_1m_input"] is not None else None,
+            cost_per_1m_output=float(r["cost_per_1m_output"]) if r["cost_per_1m_output"] is not None else None,
+            supports_reasoning=r["supports_reasoning"] or False,
+            reasoning_effort=r["reasoning_effort"],
             created_at=r["created_at"],
         )
         for r in rows
@@ -328,13 +375,15 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
         if body.model_ids:
             placeholders = ", ".join(f"${i+1}" for i in range(len(body.model_ids)))
             rows = await conn.fetch(
-                f"SELECT model_id, display_name, provider, api_base_url, default_model_name "
+                f"SELECT model_id, display_name, provider, api_base_url, default_model_name, "
+                f"reasoning_effort, supports_reasoning "
                 f"FROM frontier_models WHERE model_id IN ({placeholders})",
                 *body.model_ids,
             )
         else:
             rows = await conn.fetch(
-                "SELECT model_id, display_name, provider, api_base_url, default_model_name "
+                "SELECT model_id, display_name, provider, api_base_url, default_model_name, "
+                "reasoning_effort, supports_reasoning "
                 "FROM frontier_models ORDER BY created_at"
             )
 
@@ -627,6 +676,7 @@ async def _execute_sweep(
                 await conn.execute(UPDATE_EVAL_RUNNING_SQL, eval_id, now)
 
             model_name = model.get("default_model_name") or model_id
+            reasoning_effort = model.get("reasoning_effort")
             agent_spec = AgentSpec(
                 name=model.get("display_name", model_id),
                 url=model["api_base_url"],
@@ -635,6 +685,7 @@ async def _execute_sweep(
                     model=model_name,
                     temperature=0.0,
                     max_tokens=256,
+                    reasoning_effort=reasoning_effort,
                 ),
                 auth=BearerAuth(auth_type="bearer", token=api_key),
             )

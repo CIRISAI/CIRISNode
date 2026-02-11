@@ -23,7 +23,11 @@ from cirisnode.api.admin.routes import admin_router
 from cirisnode.api.admin.frontier_routes import frontier_router
 from cirisnode.api.admin.authority_routes import authority_router
 from cirisnode.mcp.transport import mcp_app
+from cirisnode.utils.log_buffer import install_log_buffer
 import os
+
+# Install ring buffer log handler before anything else logs
+install_log_buffer(capacity=2000)
 
 
 # ---------------------------------------------------------------------------

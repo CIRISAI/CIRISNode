@@ -321,12 +321,19 @@ class OpenAIAdapter(ProtocolAdapter):
             "content": f"Scenario: {scenario_text}\n\nQuestion: {question}",
         })
 
-        body = {
+        body: Dict[str, Any] = {
             "model": cfg.model,
             "messages": messages,
-            "temperature": cfg.temperature,
-            "max_tokens": cfg.max_tokens,
         }
+
+        # Reasoning models (o-series) don't support temperature and use
+        # max_completion_tokens instead of max_tokens
+        if cfg.reasoning_effort:
+            body["reasoning"] = {"effort": cfg.reasoning_effort}
+            body["max_completion_tokens"] = cfg.max_tokens
+        else:
+            body["temperature"] = cfg.temperature
+            body["max_tokens"] = cfg.max_tokens
 
         headers = {"Content-Type": "application/json", **_auth_headers(agent_spec)}
         if cfg.api_version:
