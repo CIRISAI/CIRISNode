@@ -663,12 +663,17 @@ class GeminiAdapter(ProtocolAdapter):
             "generationConfig": {
                 "temperature": cfg.temperature,
                 "maxOutputTokens": cfg.max_tokens,
+                # Disable thinking for Gemini 2.5+ models — simple classification
+                # doesn't need chain-of-thought and thinking tokens consume the
+                # output budget, causing empty responses.
+                "thinkingConfig": {"thinkingBudget": 0},
             },
             "safetySettings": [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
+                {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "OFF"},
             ],
         }
         if cfg.system_prompt:
@@ -698,10 +703,30 @@ class GeminiAdapter(ProtocolAdapter):
 
             candidates = data.get("candidates", [])
             if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                text_parts = [p.get("text", "") for p in parts if "text" in p]
-                return "".join(text_parts), None, tokens
-            return "", "No candidates in Gemini response", tokens
+                candidate = candidates[0]
+                finish_reason = candidate.get("finishReason", "")
+                parts = candidate.get("content", {}).get("parts", [])
+                # Filter out thought parts (thought=true) — only keep output text
+                text_parts = [
+                    p.get("text", "")
+                    for p in parts
+                    if "text" in p and not p.get("thought")
+                ]
+                text = "".join(text_parts)
+                if not text:
+                    reason = finish_reason or "unknown"
+                    logger.warning(
+                        "[GEMINI] %s model=%s: empty response (finishReason=%s, parts=%d)",
+                        scenario_id, cfg.model, reason, len(parts),
+                    )
+                    return "", f"Empty response (finishReason={reason})", tokens
+                return text, None, tokens
+            # Check for prompt-level blocking
+            block_reason = data.get("promptFeedback", {}).get("blockReason", "")
+            err_msg = f"No candidates in Gemini response"
+            if block_reason:
+                err_msg += f" (blockReason={block_reason})"
+            return "", err_msg, tokens
         except httpx.HTTPStatusError as e:
             err = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
             logger.warning("[GEMINI] %s model=%s: %s", scenario_id, cfg.model, err)
