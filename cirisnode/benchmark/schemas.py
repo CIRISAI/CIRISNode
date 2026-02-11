@@ -44,6 +44,7 @@ class ScenarioResult:
     is_correct: bool = False
 
     agent_response: str = ""
+    prompt_sent: str = ""  # composite prompt (system + category + scenario)
 
     heuristic_eval: Optional[EvalDetail] = None
     semantic_eval: Optional[EvalDetail] = None

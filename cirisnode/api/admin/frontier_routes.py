@@ -33,7 +33,7 @@ from cirisnode.benchmark.agent_spec import (
 )
 from cirisnode.benchmark.badges import compute_badges
 from cirisnode.benchmark.loader import load_scenarios
-from cirisnode.benchmark.runner import SemanticEvalConfig, run_batch
+from cirisnode.benchmark.runner import BENCHMARK_SYSTEM_PROMPT, SemanticEvalConfig, run_batch
 from cirisnode.config import settings
 from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.utils.log_buffer import get_log_buffer
@@ -752,8 +752,9 @@ async def _execute_sweep(
                 protocol_config=OpenAIProtocolConfig(
                     protocol="openai",
                     model=model_name,
+                    system_prompt=BENCHMARK_SYSTEM_PROMPT,
                     temperature=0.0,
-                    max_tokens=256,
+                    max_tokens=512,
                     reasoning_effort=reasoning_effort,
                 ),
                 auth=BearerAuth(auth_type="bearer", token=api_key),
