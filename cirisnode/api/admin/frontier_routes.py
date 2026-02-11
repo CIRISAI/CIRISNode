@@ -79,8 +79,8 @@ KEY_PROVIDER_ALIASES: Dict[str, str] = {
     "xai": "grok",          # xAI models use the "grok" API key
     "meta": "openrouter",    # Meta/Llama models route through OpenRouter
     "deepseek": "openrouter", # DeepSeek via OpenRouter
-    "mistral": "together",    # Mistral via Together AI
-    "cohere": "together",     # Cohere via Together AI
+    "mistral": "openrouter",  # Mistral via OpenRouter
+    "cohere": "openrouter",   # Cohere via OpenRouter
 }
 
 # Providers that use native APIs (not OpenAI-compatible)
