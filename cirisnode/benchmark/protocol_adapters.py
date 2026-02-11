@@ -652,6 +652,14 @@ class GeminiAdapter(ProtocolAdapter):
         base = agent_spec.url.rstrip("/")
         url = f"{base}/models/{cfg.model}:generateContent?key={api_key}"
 
+        # Gemini 2.5 models require thinking mode — cannot set budget to 0.
+        # Use a small budget so thinking doesn't dominate, but the model
+        # still works.  For non-thinking models (2.0 Flash, etc.) disable it.
+        is_thinking_model = "2.5" in cfg.model
+        thinking_config = (
+            {"thinkingBudget": 1024} if is_thinking_model else {"thinkingBudget": 0}
+        )
+
         body: Dict[str, Any] = {
             "contents": [
                 {
@@ -661,12 +669,9 @@ class GeminiAdapter(ProtocolAdapter):
                 },
             ],
             "generationConfig": {
-                "temperature": cfg.temperature,
+                **({} if is_thinking_model else {"temperature": cfg.temperature}),
                 "maxOutputTokens": cfg.max_tokens,
-                # Disable thinking for Gemini 2.5+ models — simple classification
-                # doesn't need chain-of-thought and thinking tokens consume the
-                # output budget, causing empty responses.
-                "thinkingConfig": {"thinkingBudget": 0},
+                "thinkingConfig": thinking_config,
             },
             "safetySettings": [
                 {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
