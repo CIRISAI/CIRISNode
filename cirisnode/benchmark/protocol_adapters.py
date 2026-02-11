@@ -361,14 +361,14 @@ class OpenAIAdapter(ProtocolAdapter):
             "messages": messages,
         }
 
-        # Reasoning models (o-series) don't support temperature and use
-        # max_completion_tokens instead of max_tokens
+        # Reasoning models (o-series) don't support temperature
         if cfg.reasoning_effort:
             body["reasoning_effort"] = cfg.reasoning_effort
-            body["max_completion_tokens"] = cfg.max_tokens
         else:
             body["temperature"] = cfg.temperature
-            body["max_tokens"] = cfg.max_tokens
+        # Newer OpenAI models (GPT-5+, o-series) require max_completion_tokens
+        # instead of max_tokens; it's backward-compatible with older models
+        body["max_completion_tokens"] = cfg.max_tokens
 
         headers = {"Content-Type": "application/json", **_auth_headers(agent_spec)}
         if cfg.api_version:
