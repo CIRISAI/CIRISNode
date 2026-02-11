@@ -36,6 +36,7 @@ USAGE_SQL = """
     WHERE tenant_id = $1
       AND eval_type = 'client'
       AND created_at > $2
+      AND archived_at IS NULL
 """
 
 

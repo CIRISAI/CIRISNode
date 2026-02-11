@@ -126,6 +126,12 @@ class EvaluationSummary(BaseModel):
     created_at: datetime
     completed_at: Optional[datetime] = None
     token_usage: Optional[dict[str, Any]] = None
+    archived_at: Optional[datetime] = None
+
+
+class ArchiveRequest(BaseModel):
+    """Request body for POST /api/v1/evaluations/archive and /restore."""
+    ids: list[UUID]
 
 
 class EvaluationDetail(BaseModel):

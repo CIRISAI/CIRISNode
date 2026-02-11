@@ -1,9 +1,11 @@
 """Auth-required evaluation endpoints.
 
-GET    /api/v1/evaluations           — tenant's own evals + public evals
+GET    /api/v1/evaluations           — tenant's own evals + public evals (filterable)
 GET    /api/v1/evaluations/{id}      — full detail (owner or public)
 PATCH  /api/v1/evaluations/{id}      — update visibility/agent_name (owner only)
-DELETE /api/v1/evaluations/{id}      — delete evaluation (owner only, not frontier)
+DELETE /api/v1/evaluations/{id}      — soft-delete evaluation (owner only, not frontier)
+POST   /api/v1/evaluations/archive   — bulk archive evaluations
+POST   /api/v1/evaluations/restore   — bulk restore archived evaluations
 GET    /api/v1/evaluations/{id}/report — signed JSON report (owner or public)
 GET    /api/v1/usage                 — tiered usage meter (Community / Pro / Enterprise)
 """
@@ -22,6 +24,7 @@ from cirisnode.api.agentbeats.portal_client import get_portal_client
 from cirisnode.api.agentbeats.quota import count_evals_in_window
 from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.schema.evaluation_schemas import (
+    ArchiveRequest,
     EvaluationDetail,
     EvaluationPatchRequest,
     EvaluationsListResponse,
@@ -33,6 +36,40 @@ logger = logging.getLogger(__name__)
 
 evaluations_router = APIRouter(prefix="/api/v1/evaluations", tags=["evaluations"])
 usage_router = APIRouter(prefix="/api/v1", tags=["usage"])
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_json_col(val):
+    """Parse a JSON column that might be stored as a string."""
+    if isinstance(val, str):
+        return json.loads(val)
+    return val
+
+
+def _row_to_summary(row) -> EvaluationSummary:
+    """Convert a DB row to an EvaluationSummary."""
+    return EvaluationSummary(
+        id=row["id"],
+        eval_type=row["eval_type"],
+        target_model=row["target_model"],
+        target_provider=row["target_provider"],
+        agent_name=row["agent_name"],
+        protocol=row["protocol"],
+        accuracy=row["accuracy"],
+        total_scenarios=row["total_scenarios"],
+        correct=row["correct"],
+        errors=row["errors"],
+        status=row["status"],
+        visibility=row["visibility"],
+        badges=_parse_json_col(row["badges"]) or [],
+        created_at=row["created_at"],
+        completed_at=row["completed_at"],
+        token_usage=_parse_json_col(row["token_usage"]),
+        archived_at=row.get("archived_at"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -79,25 +116,15 @@ async def get_usage(
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/evaluations — tenant list + public
+# GET /api/v1/evaluations — tenant list + public (with filters)
 # ---------------------------------------------------------------------------
 
-LIST_SQL = """
+_SELECT_COLS = """
     SELECT id, eval_type, target_model, target_provider, agent_name,
            protocol, accuracy, total_scenarios, correct, errors,
            status, visibility, badges, created_at, completed_at,
-           token_usage
+           token_usage, archived_at
     FROM evaluations
-    WHERE (tenant_id = $1 OR visibility = 'public')
-      AND status = 'completed'
-    ORDER BY created_at DESC
-    LIMIT $2 OFFSET $3
-"""
-
-COUNT_SQL = """
-    SELECT count(*) FROM evaluations
-    WHERE (tenant_id = $1 OR visibility = 'public')
-      AND status = 'completed'
 """
 
 
@@ -106,46 +133,76 @@ async def list_evaluations(
     actor: str = Depends(validate_a2a_auth),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
+    eval_type: Optional[str] = Query(None, description="Filter: frontier | client"),
+    ownership: Optional[str] = Query(None, description="Filter: mine | community | frontier"),
+    include_archived: bool = Query(False, description="Include archived evaluations"),
+    status: Optional[str] = Query(None, alias="status", description="Filter by status"),
+    model: Optional[str] = Query(None, description="Filter by model name (substring)"),
 ):
-    """List evaluations visible to the authenticated user."""
+    """List evaluations visible to the authenticated user with optional filters."""
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    # Archive filter
+    if not include_archived:
+        conditions.append("archived_at IS NULL")
+
+    # Status filter (default to completed for non-admin use)
+    if status:
+        conditions.append(f"status = ${idx}")
+        params.append(status)
+        idx += 1
+    else:
+        conditions.append("status = 'completed'")
+
+    # Ownership filter
+    if ownership == "mine":
+        conditions.append(f"tenant_id = ${idx}")
+        params.append(actor)
+        idx += 1
+    elif ownership == "community":
+        conditions.append(f"tenant_id != ${idx}")
+        params.append(actor)
+        idx += 1
+        conditions.append("eval_type = 'client'")
+        conditions.append("visibility = 'public'")
+    elif ownership == "frontier":
+        conditions.append("eval_type = 'frontier'")
+        conditions.append("visibility = 'public'")
+    else:
+        # Default: own + public
+        conditions.append(f"(tenant_id = ${idx} OR visibility = 'public')")
+        params.append(actor)
+        idx += 1
+
+    # Eval type filter (when ownership doesn't already set it)
+    if eval_type and ownership not in ("frontier", "community"):
+        conditions.append(f"eval_type = ${idx}")
+        params.append(eval_type)
+        idx += 1
+
+    # Model name substring filter
+    if model:
+        conditions.append(f"target_model ILIKE '%' || ${idx} || '%'")
+        params.append(model)
+        idx += 1
+
+    where = " AND ".join(conditions)
+
+    count_sql = f"SELECT count(*) FROM evaluations WHERE {where}"
+    list_sql = f"{_SELECT_COLS} WHERE {where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
+
     offset = (page - 1) * per_page
+    list_params = params + [per_page, offset]
 
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
-        total = await conn.fetchval(COUNT_SQL, actor)
-        rows = await conn.fetch(LIST_SQL, actor, per_page, offset)
-
-    evals = []
-    for row in rows:
-        badges = row["badges"]
-        if isinstance(badges, str):
-            badges = json.loads(badges)
-
-        tu = row["token_usage"]
-        if isinstance(tu, str):
-            tu = json.loads(tu)
-
-        evals.append(EvaluationSummary(
-            id=row["id"],
-            eval_type=row["eval_type"],
-            target_model=row["target_model"],
-            target_provider=row["target_provider"],
-            agent_name=row["agent_name"],
-            protocol=row["protocol"],
-            accuracy=row["accuracy"],
-            total_scenarios=row["total_scenarios"],
-            correct=row["correct"],
-            errors=row["errors"],
-            status=row["status"],
-            visibility=row["visibility"],
-            badges=badges or [],
-            created_at=row["created_at"],
-            completed_at=row["completed_at"],
-            token_usage=tu,
-        ))
+        total = await conn.fetchval(count_sql, *params)
+        rows = await conn.fetch(list_sql, *list_params)
 
     return EvaluationsListResponse(
-        evaluations=evals,
+        evaluations=[_row_to_summary(row) for row in rows],
         total=total or 0,
         page=page,
         per_page=per_page,
@@ -186,26 +243,6 @@ async def get_evaluation(
     if row["tenant_id"] != actor and row["visibility"] != "public":
         raise HTTPException(status_code=404, detail="Evaluation not found")
 
-    categories = row["categories"]
-    if isinstance(categories, str):
-        categories = json.loads(categories)
-
-    badges = row["badges"]
-    if isinstance(badges, str):
-        badges = json.loads(badges)
-
-    scenario_results = row["scenario_results"]
-    if isinstance(scenario_results, str):
-        scenario_results = json.loads(scenario_results)
-
-    dm = row["dataset_meta"]
-    if isinstance(dm, str):
-        dm = json.loads(dm)
-
-    tu = row["token_usage"]
-    if isinstance(tu, str):
-        tu = json.loads(tu)
-
     return EvaluationDetail(
         id=row["id"],
         tenant_id=row["tenant_id"],
@@ -223,18 +260,18 @@ async def get_evaluation(
         total_scenarios=row["total_scenarios"],
         correct=row["correct"],
         errors=row["errors"],
-        categories=categories,
+        categories=_parse_json_col(row["categories"]),
         avg_latency_ms=row["avg_latency_ms"],
         processing_ms=row["processing_ms"],
-        scenario_results=scenario_results,
+        scenario_results=_parse_json_col(row["scenario_results"]),
         trace_id=row["trace_id"],
         visibility=row["visibility"],
-        badges=badges or [],
+        badges=_parse_json_col(row["badges"]) or [],
         created_at=row["created_at"],
         started_at=row["started_at"],
         completed_at=row["completed_at"],
-        dataset_meta=dm,
-        token_usage=tu,
+        dataset_meta=_parse_json_col(row["dataset_meta"]),
+        token_usage=_parse_json_col(row["token_usage"]),
     )
 
 
@@ -294,31 +331,11 @@ async def patch_evaluation(
         sql = f"UPDATE evaluations SET {', '.join(set_parts)} WHERE id = $1 RETURNING *"
         updated = await conn.fetchrow(sql, *params)
 
-    badges = updated["badges"]
-    if isinstance(badges, str):
-        badges = json.loads(badges)
-
-    return EvaluationSummary(
-        id=updated["id"],
-        eval_type=updated["eval_type"],
-        target_model=updated["target_model"],
-        target_provider=updated["target_provider"],
-        agent_name=updated["agent_name"],
-        protocol=updated["protocol"],
-        accuracy=updated["accuracy"],
-        total_scenarios=updated["total_scenarios"],
-        correct=updated["correct"],
-        errors=updated["errors"],
-        status=updated["status"],
-        visibility=updated["visibility"],
-        badges=badges or [],
-        created_at=updated["created_at"],
-        completed_at=updated["completed_at"],
-    )
+    return _row_to_summary(updated)
 
 
 # ---------------------------------------------------------------------------
-# DELETE /api/v1/evaluations/{id} — delete evaluation (owner only)
+# DELETE /api/v1/evaluations/{id} — soft-delete (archive) evaluation
 # ---------------------------------------------------------------------------
 
 @evaluations_router.delete("/{eval_id}", status_code=204)
@@ -326,7 +343,7 @@ async def delete_evaluation(
     eval_id: UUID,
     actor: str = Depends(validate_a2a_auth),
 ):
-    """Delete an evaluation. Owner only. Frontier evals cannot be deleted."""
+    """Soft-delete an evaluation (sets archived_at). Owner only. Frontier evals cannot be deleted."""
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -340,9 +357,87 @@ async def delete_evaluation(
         if row["eval_type"] == "frontier":
             raise HTTPException(status_code=403, detail="Frontier evaluations cannot be deleted")
 
-        await conn.execute("DELETE FROM evaluations WHERE id = $1", eval_id)
+        await conn.execute(
+            "UPDATE evaluations SET archived_at = NOW() WHERE id = $1",
+            eval_id,
+        )
 
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/evaluations/archive — bulk archive
+# ---------------------------------------------------------------------------
+
+@evaluations_router.post("/archive")
+async def archive_evaluations(
+    body: ArchiveRequest,
+    actor: str = Depends(validate_a2a_auth),
+):
+    """Bulk archive evaluations. Admin can archive any; users can only archive their own."""
+    if not body.ids:
+        raise HTTPException(status_code=422, detail="No evaluation IDs provided")
+
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        # Check if actor is admin (look at JWT claims)
+        is_admin = await _check_admin_role(actor, conn)
+
+        if is_admin:
+            # Admin can archive any evaluation
+            result = await conn.execute(
+                "UPDATE evaluations SET archived_at = NOW() WHERE id = ANY($1) AND archived_at IS NULL",
+                body.ids,
+            )
+        else:
+            # Regular user: only their own non-frontier evals
+            result = await conn.execute(
+                "UPDATE evaluations SET archived_at = NOW() "
+                "WHERE id = ANY($1) AND tenant_id = $2 AND eval_type != 'frontier' AND archived_at IS NULL",
+                body.ids, actor,
+            )
+
+    count = int(result.split()[-1]) if result else 0
+    return {"archived": count}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/evaluations/restore — bulk restore
+# ---------------------------------------------------------------------------
+
+@evaluations_router.post("/restore")
+async def restore_evaluations(
+    body: ArchiveRequest,
+    actor: str = Depends(validate_a2a_auth),
+):
+    """Bulk restore archived evaluations. Admin can restore any; users can only restore their own."""
+    if not body.ids:
+        raise HTTPException(status_code=422, detail="No evaluation IDs provided")
+
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        is_admin = await _check_admin_role(actor, conn)
+
+        if is_admin:
+            result = await conn.execute(
+                "UPDATE evaluations SET archived_at = NULL WHERE id = ANY($1) AND archived_at IS NOT NULL",
+                body.ids,
+            )
+        else:
+            result = await conn.execute(
+                "UPDATE evaluations SET archived_at = NULL "
+                "WHERE id = ANY($1) AND tenant_id = $2 AND archived_at IS NOT NULL",
+                body.ids, actor,
+            )
+
+    count = int(result.split()[-1]) if result else 0
+    return {"restored": count}
+
+
+async def _check_admin_role(actor: str, conn) -> bool:
+    """Check if the actor has admin role. Uses email domain check (@ciris.ai)."""
+    # Admin accounts are @ciris.ai emails
+    return actor.endswith("@ciris.ai")
 
 
 # ---------------------------------------------------------------------------
@@ -369,27 +464,13 @@ async def get_evaluation_report(
     if row["tenant_id"] != actor and row["visibility"] != "public":
         raise HTTPException(status_code=404, detail="Evaluation not found")
 
-    categories = row["categories"]
-    if isinstance(categories, str):
-        categories = json.loads(categories)
-
-    badges = row["badges"]
-    if isinstance(badges, str):
-        badges = json.loads(badges)
-
-    scenario_results = row["scenario_results"]
-    if isinstance(scenario_results, str):
-        scenario_results = json.loads(scenario_results)
+    categories = _parse_json_col(row["categories"])
+    badges = _parse_json_col(row["badges"])
+    scenario_results = _parse_json_col(row["scenario_results"])
+    report_dm = _parse_json_col(row["dataset_meta"])
+    report_tu = _parse_json_col(row["token_usage"])
 
     now = datetime.now(timezone.utc)
-
-    report_dm = row["dataset_meta"]
-    if isinstance(report_dm, str):
-        report_dm = json.loads(report_dm)
-
-    report_tu = row["token_usage"]
-    if isinstance(report_tu, str):
-        report_tu = json.loads(report_tu)
 
     summary: dict[str, Any] = {
         "agent_name": row["agent_name"],

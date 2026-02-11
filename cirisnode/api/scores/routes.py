@@ -54,6 +54,7 @@ SCORES_SQL = """
     WHERE e.eval_type = 'frontier'
       AND e.status = 'completed'
       AND e.visibility = 'public'
+      AND e.archived_at IS NULL
     GROUP BY e.target_model, fm.display_name, fm.provider
     HAVING COUNT(*) >= 5
     ORDER BY AVG(e.accuracy) DESC
@@ -67,6 +68,7 @@ TREND_SQL = """
           AND eval_type = 'frontier'
           AND status = 'completed'
           AND visibility = 'public'
+          AND archived_at IS NULL
     )
     SELECT
         AVG(CASE WHEN rn <= 5 THEN accuracy END) AS recent_avg,
@@ -148,6 +150,7 @@ MODEL_HISTORY_SQL = """
     WHERE e.target_model = $1
       AND e.status = 'completed'
       AND e.visibility = 'public'
+      AND e.archived_at IS NULL
     ORDER BY e.completed_at DESC
     LIMIT 50
 """
@@ -213,6 +216,7 @@ LEADERBOARD_SQL = """
     WHERE visibility = 'public'
       AND status = 'completed'
       AND eval_type = 'client'
+      AND archived_at IS NULL
     ORDER BY accuracy DESC
     LIMIT $1
 """
