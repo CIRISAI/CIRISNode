@@ -916,11 +916,16 @@ async def _execute_sweep(
                 auth = ApiKeyAuth(auth_type="api_key", key=api_key, header_name="x-goog-api-key")
             else:
                 # OpenAI-compatible (OpenAI, xAI/Grok, OpenRouter, Together, Groq)
+                # Reasoning models (o3, o3-mini, etc.) include reasoning tokens
+                # in max_completion_tokens; 512 is too small and causes empty
+                # responses when reasoning exhausts the budget.  Use 16384 so
+                # the model has ample room to think + answer.
+                oai_max = 16384 if reasoning_effort else 512
                 protocol_config = OpenAIProtocolConfig(
                     model=model_name,
                     system_prompt=BENCHMARK_SYSTEM_PROMPT,
                     temperature=0.0,
-                    max_tokens=512,
+                    max_tokens=oai_max,
                     reasoning_effort=reasoning_effort,
                 )
                 auth = BearerAuth(auth_type="bearer", token=api_key)
