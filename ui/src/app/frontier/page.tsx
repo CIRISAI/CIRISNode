@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import { apiFetch } from "../../lib/api";
 import RoleGuard from "../../components/RoleGuard";
 
@@ -62,6 +63,8 @@ export default function FrontierPage() {
 }
 
 function FrontierContent() {
+  const { data: session } = useSession();
+  const token = session?.user?.apiToken;
   const [frontierKeys, setFrontierKeys] = useState<FrontierKey[]>([]);
   const [models, setModels] = useState<FrontierModel[]>([]);
   const [sweeps, setSweeps] = useState<RecentSweep[]>([]);
@@ -80,11 +83,12 @@ function FrontierContent() {
   });
 
   const fetchData = useCallback(async () => {
+    if (!token) return;
     try {
       const [keysRes, modelsRes, sweepsRes] = await Promise.all([
-        apiFetch<FrontierKey[]>("/api/v1/admin/frontier-keys"),
-        apiFetch<{ models: FrontierModel[] }>("/api/v1/admin/frontier-models"),
-        apiFetch<{ sweeps: RecentSweep[] }>("/api/v1/admin/frontier-sweeps"),
+        apiFetch<FrontierKey[]>("/api/v1/admin/frontier-keys", { token }),
+        apiFetch<{ models: FrontierModel[] }>("/api/v1/admin/frontier-models", { token }),
+        apiFetch<{ sweeps: RecentSweep[] }>("/api/v1/admin/frontier-sweeps", { token }),
       ]);
       setFrontierKeys(Array.isArray(keysRes) ? keysRes : []);
       setModels(modelsRes.models || []);
@@ -95,7 +99,7 @@ function FrontierContent() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     fetchData();
@@ -110,7 +114,7 @@ function FrontierContent() {
     const interval = setInterval(async () => {
       try {
         const progress = await apiFetch<SweepProgress>(
-          `/api/v1/admin/frontier-sweep/${activeSweep.sweep_id}`
+          `/api/v1/admin/frontier-sweep/${activeSweep.sweep_id}`, { token }
         );
         setActiveSweep(progress);
         if (progress.pending === 0 && progress.running === 0) {
@@ -128,6 +132,7 @@ function FrontierContent() {
       await apiFetch("/api/v1/admin/frontier-models", {
         method: "POST",
         body: JSON.stringify(newModel),
+        token,
       });
       setShowAddForm(false);
       setNewModel({ model_id: "", display_name: "", provider: "", api_base_url: "https://api.openai.com/v1", default_model_name: "" });
@@ -140,7 +145,7 @@ function FrontierContent() {
   const deleteModel = async (modelId: string) => {
     if (!confirm(`Delete model ${modelId}?`)) return;
     try {
-      await apiFetch(`/api/v1/admin/frontier-models/${modelId}`, { method: "DELETE" });
+      await apiFetch(`/api/v1/admin/frontier-models/${modelId}`, { method: "DELETE", token });
       fetchData();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to delete model");
@@ -153,9 +158,10 @@ function FrontierContent() {
       const res = await apiFetch<{ sweep_id: string }>("/api/v1/admin/frontier-sweep", {
         method: "POST",
         body: JSON.stringify({ concurrency: 50 }),
+        token,
       });
       const progress = await apiFetch<SweepProgress>(
-        `/api/v1/admin/frontier-sweep/${res.sweep_id}`
+        `/api/v1/admin/frontier-sweep/${res.sweep_id}`, { token }
       );
       setActiveSweep(progress);
     } catch (err) {
@@ -166,7 +172,7 @@ function FrontierContent() {
   const viewSweep = async (sweepId: string) => {
     try {
       const progress = await apiFetch<SweepProgress>(
-        `/api/v1/admin/frontier-sweep/${sweepId}`
+        `/api/v1/admin/frontier-sweep/${sweepId}`, { token }
       );
       setActiveSweep(progress);
     } catch (err) {

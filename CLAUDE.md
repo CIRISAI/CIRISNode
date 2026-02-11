@@ -159,6 +159,7 @@ Admin endpoints for running HE-300 benchmarks across frontier LLMs.
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET | `/api/v1/admin/frontier-keys` | List configured API key providers (masked previews) |
 | POST | `/api/v1/admin/frontier-models` | Register/update a model |
 | GET | `/api/v1/admin/frontier-models` | List registered models |
 | DELETE | `/api/v1/admin/frontier-models/{model_id}` | Remove a model |
