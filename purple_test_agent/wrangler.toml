@@ -4,7 +4,8 @@ compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-# Response strategy: "echo" | "ethical" | "random"
-RESPONSE_STRATEGY = "ethical"
+OPENAI_MODEL = "gpt-4o-mini"
 
-# AGENT_AUTH_TOKEN is set as a secret via: wrangler secret put AGENT_AUTH_TOKEN
+# Secrets set via: wrangler secret put <NAME>
+#   AGENT_AUTH_TOKEN — auth token for benchmark callers
+#   OPENAI_API_KEY   — OpenAI API key for LLM calls
