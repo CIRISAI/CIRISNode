@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
-import { apiFetch } from "../../lib/api";
+import { apiFetch, apiUrl } from "../../lib/api";
 import RoleGuard from "../../components/RoleGuard";
 
 interface FrontierKey {
@@ -43,6 +43,7 @@ interface SweepProgress {
   failed: number;
   pending: number;
   running: number;
+  control_status: string;
   models: SweepModel[];
 }
 
@@ -105,27 +106,65 @@ function FrontierContent() {
     fetchData();
   }, [fetchData]);
 
-  // Poll active sweep
+  // SSE stream for active sweep
+  const abortRef = useRef<AbortController | null>(null);
   useEffect(() => {
-    if (!activeSweep) return;
-    const done = activeSweep.pending === 0 && activeSweep.running === 0;
+    if (!activeSweep || !token) return;
+    const done = activeSweep.control_status === "finished" ||
+      (activeSweep.pending === 0 && activeSweep.running === 0);
     if (done) return;
 
-    const interval = setInterval(async () => {
-      try {
-        const progress = await apiFetch<SweepProgress>(
-          `/api/v1/admin/frontier-sweep/${activeSweep.sweep_id}`, { token }
-        );
-        setActiveSweep(progress);
-        if (progress.pending === 0 && progress.running === 0) {
-          fetchData();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const streamUrl = apiUrl(`/api/v1/admin/frontier-sweep/${activeSweep.sweep_id}/stream`);
+    fetch(streamUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    }).then(async (res) => {
+      if (!res.ok || !res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const progress: SweepProgress = JSON.parse(line.slice(6));
+              setActiveSweep(progress);
+              if (progress.pending === 0 && progress.running === 0) {
+                fetchData();
+              }
+            } catch { /* ignore parse errors */ }
+          }
         }
-      } catch {
-        // ignore polling errors
       }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [activeSweep, fetchData, token]);
+    }).catch(() => { /* aborted or network error */ });
+
+    return () => controller.abort();
+  }, [activeSweep?.sweep_id, activeSweep?.control_status, token, fetchData]);
+
+  const sweepControl = async (action: "pause" | "resume" | "cancel") => {
+    if (!activeSweep) return;
+    try {
+      await apiFetch(`/api/v1/admin/frontier-sweep/${activeSweep.sweep_id}/${action}`, {
+        method: "POST", token,
+      });
+      // Fetch fresh state
+      const progress = await apiFetch<SweepProgress>(
+        `/api/v1/admin/frontier-sweep/${activeSweep.sweep_id}`, { token }
+      );
+      setActiveSweep(progress);
+      if (action === "cancel") fetchData();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : `Failed to ${action} sweep`);
+    }
+  };
 
   const addModel = async () => {
     try {
@@ -358,10 +397,47 @@ function FrontierContent() {
         {activeSweep && (
           <div className="bg-white shadow rounded-lg p-6 mb-6">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-lg font-semibold">Sweep: {activeSweep.sweep_id}</h3>
-              <span className="text-sm text-gray-500">
-                {activeSweep.completed + activeSweep.failed} / {activeSweep.total} models
-              </span>
+              <div className="flex items-center gap-3">
+                <h3 className="text-lg font-semibold">Sweep: {activeSweep.sweep_id}</h3>
+                {statusBadge(activeSweep.control_status)}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-500 mr-2">
+                  {activeSweep.completed + activeSweep.failed} / {activeSweep.total} models
+                </span>
+                {activeSweep.control_status === "running" && (
+                  <button
+                    onClick={() => sweepControl("pause")}
+                    className="px-3 py-1 bg-yellow-500 text-white text-xs rounded hover:bg-yellow-600 transition-colors"
+                  >
+                    Pause
+                  </button>
+                )}
+                {activeSweep.control_status === "paused" && (
+                  <button
+                    onClick={() => sweepControl("resume")}
+                    className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors"
+                  >
+                    Resume
+                  </button>
+                )}
+                {(activeSweep.control_status === "running" || activeSweep.control_status === "paused") && (
+                  <button
+                    onClick={() => sweepControl("cancel")}
+                    className="px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                )}
+                {(activeSweep.control_status === "finished" || activeSweep.control_status === "cancelled") && (
+                  <button
+                    onClick={() => setActiveSweep(null)}
+                    className="px-3 py-1 bg-gray-500 text-white text-xs rounded hover:bg-gray-600 transition-colors"
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </div>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-3 mb-4">
               <div
@@ -383,7 +459,7 @@ function FrontierContent() {
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {activeSweep.models.map((m) => (
-                    <tr key={m.model_id}>
+                    <tr key={m.model_id} className={m.status === "running" ? "bg-blue-50" : ""}>
                       <td className="px-4 py-2 text-sm">{m.display_name || m.model_id}</td>
                       <td className="px-4 py-2 text-sm">{statusBadge(m.status)}</td>
                       <td className="px-4 py-2 text-sm text-right font-mono">

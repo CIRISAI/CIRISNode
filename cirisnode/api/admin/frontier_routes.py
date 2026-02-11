@@ -6,6 +6,10 @@ DELETE /api/v1/admin/frontier-models/{model_id} — remove a model
 
 POST   /api/v1/admin/frontier-sweep            — launch sweep
 GET    /api/v1/admin/frontier-sweep/{sweep_id}  — sweep progress
+GET    /api/v1/admin/frontier-sweep/{sweep_id}/stream — SSE status stream
+POST   /api/v1/admin/frontier-sweep/{sweep_id}/pause  — pause sweep
+POST   /api/v1/admin/frontier-sweep/{sweep_id}/resume — resume sweep
+POST   /api/v1/admin/frontier-sweep/{sweep_id}/cancel — cancel sweep
 GET    /api/v1/admin/frontier-sweeps            — list recent sweeps
 
 All endpoints require admin JWT (role='admin').
@@ -19,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from cirisnode.benchmark.agent_spec import (
@@ -54,6 +59,24 @@ def _load_api_keys() -> Dict[str, str]:
         return {k.lower(): v for k, v in raw.items()}
     except (json.JSONDecodeError, AttributeError):
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Sweep control state (in-memory, per-process)
+# ---------------------------------------------------------------------------
+
+# Per-provider concurrency limit: 1 model at a time per provider
+PROVIDER_CONCURRENCY = 1
+# Max total parallel model runs across all providers
+GLOBAL_CONCURRENCY = 3
+
+# {sweep_id: {"status": "running"|"paused"|"cancelled"}}
+_sweep_controls: Dict[str, Dict[str, str]] = {}
+
+
+def _get_sweep_control(sweep_id: str) -> str:
+    """Get control status for a sweep. Returns 'running' if not tracked."""
+    return _sweep_controls.get(sweep_id, {}).get("status", "running")
 
 
 # In-memory INSERT SQL (matches agentbeats INSERT_EVAL_SQL)
@@ -163,6 +186,7 @@ class SweepProgressResponse(BaseModel):
     failed: int
     pending: int
     running: int
+    control_status: str = "running"  # running | paused | cancelled | finished
     models: List[SweepModelStatus]
 
 
@@ -376,6 +400,9 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
                 None,                                       # completed_at
             )
 
+    # Register sweep control state
+    _sweep_controls[sweep_id] = {"status": "running"}
+
     # Fire background sweep task
     asyncio.create_task(
         _execute_sweep(
@@ -443,6 +470,11 @@ async def get_sweep_progress(sweep_id: str):
             error=error,
         ))
 
+    # Determine control status
+    ctrl = _get_sweep_control(sweep_id)
+    if ctrl == "running" and pending == 0 and running == 0:
+        ctrl = "finished"
+
     return SweepProgressResponse(
         sweep_id=sweep_id,
         total=len(rows),
@@ -450,6 +482,7 @@ async def get_sweep_progress(sweep_id: str):
         failed=failed,
         pending=pending,
         running=running,
+        control_status=ctrl,
         models=models,
     )
 
@@ -473,6 +506,86 @@ async def list_recent_sweeps(limit: int = 20):
 
 
 # ---------------------------------------------------------------------------
+# SSE stream + sweep controls
+# ---------------------------------------------------------------------------
+
+@frontier_router.get("/frontier-sweep/{sweep_id}/stream")
+async def stream_sweep_progress(sweep_id: str):
+    """SSE endpoint streaming sweep progress every 2 seconds."""
+    async def _event_stream():
+        while True:
+            try:
+                progress = await get_sweep_progress(sweep_id)
+                data = progress.model_dump_json()
+                yield f"data: {data}\n\n"
+                # Stop streaming when sweep is done
+                if progress.pending == 0 and progress.running == 0:
+                    yield f"event: done\ndata: {data}\n\n"
+                    break
+                # Also stop if cancelled and nothing running
+                if progress.control_status == "cancelled" and progress.running == 0:
+                    yield f"event: done\ndata: {data}\n\n"
+                    break
+            except HTTPException:
+                yield f"event: error\ndata: {{\"error\": \"Sweep not found\"}}\n\n"
+                break
+            except Exception as exc:
+                logger.exception("[SSE] Error streaming sweep %s", sweep_id)
+                yield f"event: error\ndata: {{\"error\": \"{exc}\"}}\n\n"
+                break
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@frontier_router.post("/frontier-sweep/{sweep_id}/pause")
+async def pause_sweep(sweep_id: str):
+    """Pause a running sweep. Models already running will finish."""
+    if sweep_id not in _sweep_controls:
+        raise HTTPException(status_code=404, detail=f"Sweep '{sweep_id}' not tracked")
+    _sweep_controls[sweep_id]["status"] = "paused"
+    logger.info("[SWEEP] Paused %s", sweep_id)
+    return {"sweep_id": sweep_id, "control_status": "paused"}
+
+
+@frontier_router.post("/frontier-sweep/{sweep_id}/resume")
+async def resume_sweep(sweep_id: str):
+    """Resume a paused sweep."""
+    if sweep_id not in _sweep_controls:
+        raise HTTPException(status_code=404, detail=f"Sweep '{sweep_id}' not tracked")
+    _sweep_controls[sweep_id]["status"] = "running"
+    logger.info("[SWEEP] Resumed %s", sweep_id)
+    return {"sweep_id": sweep_id, "control_status": "running"}
+
+
+@frontier_router.post("/frontier-sweep/{sweep_id}/cancel")
+async def cancel_sweep(sweep_id: str):
+    """Cancel a sweep. Running models finish, pending models are marked failed."""
+    if sweep_id not in _sweep_controls:
+        raise HTTPException(status_code=404, detail=f"Sweep '{sweep_id}' not tracked")
+    _sweep_controls[sweep_id]["status"] = "cancelled"
+    logger.info("[SWEEP] Cancelled %s", sweep_id)
+    # Mark all pending evals as failed
+    try:
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """UPDATE evaluations SET status = 'failed',
+                   scenario_results = '{"error": "Sweep cancelled by admin"}'::jsonb,
+                   completed_at = now()
+                   WHERE trace_id LIKE $1 AND status = 'pending'""",
+                f"{sweep_id}/%",
+            )
+    except Exception:
+        logger.exception("[SWEEP] Failed to mark pending evals as cancelled for %s", sweep_id)
+    return {"sweep_id": sweep_id, "control_status": "cancelled"}
+
+
+# ---------------------------------------------------------------------------
 # Background sweep execution
 # ---------------------------------------------------------------------------
 
@@ -485,23 +598,34 @@ async def _execute_sweep(
     concurrency: int,
     seed: int,
 ) -> None:
-    """Run benchmark for each model with bounded parallelism (2 at a time)."""
-    semaphore = asyncio.Semaphore(2)  # Limit parallel model runs to avoid rate limits
+    """Run benchmark for each model with per-provider + global rate limiting."""
+    global_sem = asyncio.Semaphore(GLOBAL_CONCURRENCY)
+    # Per-provider semaphores: 1 concurrent model per provider
+    provider_sems: Dict[str, asyncio.Semaphore] = {}
+    for m in models:
+        prov = m["provider"].lower()
+        if prov not in provider_sems:
+            provider_sems[prov] = asyncio.Semaphore(PROVIDER_CONCURRENCY)
 
     async def _run_model(model: Dict[str, Any]) -> None:
         model_id = model["model_id"]
         eval_id = eval_ids[model_id]
         provider_key = model["provider"].lower()
         api_key = api_keys[provider_key]
+        prov_sem = provider_sems[provider_key]
+
+        # Wait while paused, bail if cancelled
+        while _get_sweep_control(sweep_id) == "paused":
+            await asyncio.sleep(1)
+        if _get_sweep_control(sweep_id) == "cancelled":
+            return  # eval already marked failed by cancel endpoint
 
         try:
-            # Mark as running
             pool = await get_pg_pool()
             now = datetime.now(timezone.utc)
             async with pool.acquire() as conn:
                 await conn.execute(UPDATE_EVAL_RUNNING_SQL, eval_id, now)
 
-            # Build AgentSpec for this model
             model_name = model.get("default_model_name") or model_id
             agent_spec = AgentSpec(
                 name=model.get("display_name", model_id),
@@ -516,20 +640,20 @@ async def _execute_sweep(
             )
 
             batch_id = f"{sweep_id}/{model_id}"
-            logger.info("[SWEEP] Starting model %s (batch=%s)", model_id, batch_id)
+            logger.info("[SWEEP] Starting %s (provider=%s, batch=%s)", model_id, provider_key, batch_id)
 
-            async with semaphore:
-                batch_result = await run_batch(
-                    scenarios=scenarios,
-                    agent_spec=agent_spec,
-                    batch_id=batch_id,
-                    concurrency=concurrency,
-                )
+            # Acquire both provider and global semaphore
+            async with prov_sem:
+                async with global_sem:
+                    batch_result = await run_batch(
+                        scenarios=scenarios,
+                        agent_spec=agent_spec,
+                        batch_id=batch_id,
+                        concurrency=concurrency,
+                    )
 
-            # Compute badges (always full HE-300)
             badges = compute_badges(batch_result.accuracy, batch_result.categories)
 
-            # Update eval row with results
             completed_at = datetime.now(timezone.utc)
             async with pool.acquire() as conn:
                 await conn.execute(
@@ -566,9 +690,12 @@ async def _execute_sweep(
             except Exception:
                 logger.exception("[SWEEP] Failed to update eval row for %s", model_id)
 
-    # Run all models with bounded concurrency
+    # Run all models with per-provider + global rate limiting
     tasks = [_run_model(m) for m in models]
     await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Clean up control state
+    _sweep_controls.pop(sweep_id, None)
 
     # Invalidate Redis caches
     try:
