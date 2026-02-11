@@ -38,8 +38,11 @@ class LogBufferHandler(logging.Handler):
         """Return recent logs, newest first, with optional filtering."""
         entries = list(self._buffer)
         if level:
-            level_upper = level.upper()
-            entries = [e for e in entries if e["level"] == level_upper]
+            min_level = getattr(logging, level.upper(), logging.DEBUG)
+            entries = [
+                e for e in entries
+                if getattr(logging, e["level"], 0) >= min_level
+            ]
         if pattern:
             pattern_lower = pattern.lower()
             entries = [
@@ -63,7 +66,14 @@ def install_log_buffer(capacity: int = 2000) -> LogBufferHandler:
     _handler = LogBufferHandler(capacity=capacity)
     _handler.setFormatter(logging.Formatter("%(message)s"))
     _handler.setLevel(logging.DEBUG)
-    logging.getLogger().addHandler(_handler)
+    root = logging.getLogger()
+    root.addHandler(_handler)
+    # Root default is WARNING — lower to DEBUG so our INFO/WARNING logs reach the handler.
+    # Suppress noisy third-party loggers to keep the buffer useful.
+    if root.level > logging.DEBUG:
+        root.setLevel(logging.DEBUG)
+    for noisy in ("httpx", "httpcore", "asyncio", "urllib3", "watchfiles", "uvicorn.access"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     return _handler
 
 

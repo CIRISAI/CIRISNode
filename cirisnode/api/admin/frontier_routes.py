@@ -219,6 +219,8 @@ class SweepModelStatus(BaseModel):
     display_name: str
     status: str
     accuracy: Optional[float] = None
+    total_scenarios: Optional[int] = None
+    errors: Optional[int] = None
     error: Optional[str] = None
 
 
@@ -353,6 +355,7 @@ async def delete_frontier_model(model_id: str):
 
 SWEEP_PROGRESS_SQL = """
     SELECT e.id, e.target_model, e.status, e.accuracy,
+           e.total_scenarios, e.errors,
            e.scenario_results, fm.display_name
     FROM evaluations e
     LEFT JOIN frontier_models fm ON fm.model_id = e.target_model
@@ -563,6 +566,9 @@ async def get_sweep_progress(sweep_id: str):
                     sr = None
             if isinstance(sr, dict):
                 error = sr.get("error")
+                first_err = sr.get("first_error")
+                if first_err and error:
+                    error = f"{error}. First error: {first_err}"
         elif s == "running":
             running += 1
         else:
@@ -573,6 +579,8 @@ async def get_sweep_progress(sweep_id: str):
             display_name=row["display_name"] or row["target_model"],
             status=s,
             accuracy=row["accuracy"],
+            total_scenarios=row["total_scenarios"],
+            errors=row["errors"],
             error=error,
         ))
 
@@ -802,7 +810,10 @@ async def _execute_sweep(
             )
 
             batch_id = f"{sweep_id}/{model_id}"
-            logger.info("[SWEEP] Starting %s (provider=%s, batch=%s)", model_id, provider_key, batch_id)
+            logger.info(
+                "[SWEEP] Starting %s (provider=%s, protocol=%s, model=%s, url=%s)",
+                model_id, provider_key, protocol_config.protocol, model_name, model["api_base_url"],
+            )
 
             # Acquire both provider and global semaphore
             async with prov_sem:
@@ -819,10 +830,15 @@ async def _execute_sweep(
             # Guard: refuse to publish catastrophic results
             error_rate = batch_result.errors / batch_result.total if batch_result.total else 1.0
             if error_rate > 0.5:
+                first_error = next(
+                    (r["error"] for r in batch_result.results if r.get("error") and "aborted" not in r["error"]),
+                    next((r["error"] for r in batch_result.results if r.get("error")), "unknown"),
+                )
                 logger.error(
                     "[SWEEP] Model %s REJECTED: %.0f%% error rate (%d/%d errors). "
-                    "NOT publishing. Check model config (api_base_url, default_model_name, API key).",
+                    "First error: %s",
                     model_id, error_rate * 100, batch_result.errors, batch_result.total,
+                    first_error,
                 )
                 # Save as failed so we can inspect, but don't publish
                 async with pool.acquire() as conn:
@@ -831,10 +847,7 @@ async def _execute_sweep(
                         eval_id,
                         json.dumps({
                             "error": f"Catastrophic error rate: {batch_result.errors}/{batch_result.total} errors",
-                            "first_error": next(
-                                (r["error"] for r in batch_result.results if r.get("error")),
-                                "unknown",
-                            ),
+                            "first_error": first_error,
                         }),
                         datetime.now(timezone.utc),
                     )
