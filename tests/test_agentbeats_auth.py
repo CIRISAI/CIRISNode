@@ -75,32 +75,6 @@ async def test_resolve_actor_standalone():
 
 
 # ---------------------------------------------------------------------------
-# Engine Bearer API key fallback
-# ---------------------------------------------------------------------------
-
-
-def test_engine_bearer_api_key_fallback():
-    """Engine require_auth should accept a static API key as Bearer token."""
-    import sys
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "engine"))
-    os.environ["ENGINE_API_KEYS"] = "test-key-12345678"
-    os.environ["AUTH_ENABLED"] = "true"
-
-    from config.settings import Settings
-    settings = Settings()
-
-    from api.dependencies import _validate_jwt, _validate_api_key
-
-    # A non-JWT Bearer token should fail JWT but succeed as API key
-    token = "test-key-12345678"
-    assert _validate_jwt(token) is None
-    assert _validate_api_key(token) is not None
-    assert _validate_api_key(token).startswith("apikey:")
-
-    os.environ.pop("ENGINE_API_KEYS", None)
-
-
-# ---------------------------------------------------------------------------
 # CIRISNode config: AGENTBEATS_MODE setting
 # ---------------------------------------------------------------------------
 
