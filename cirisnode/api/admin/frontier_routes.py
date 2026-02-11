@@ -108,6 +108,23 @@ UPDATE_EVAL_RUNNING_SQL = """
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
+class FrontierKeyInfo(BaseModel):
+    provider: str
+    key_preview: str
+    key_length: int
+
+
+@frontier_router.get("/frontier-keys", response_model=List[FrontierKeyInfo])
+async def list_frontier_keys():
+    """List configured frontier API key providers with masked previews."""
+    api_keys = _load_api_keys()
+    result = []
+    for provider, key in sorted(api_keys.items()):
+        preview = f"{key[:4]}...{key[-4:]}" if len(key) >= 8 else "****"
+        result.append(FrontierKeyInfo(provider=provider, key_preview=preview, key_length=len(key)))
+    return result
+
+
 class FrontierModelCreate(BaseModel):
     model_id: str = Field(..., description="Unique model identifier (e.g. 'gpt-4o')")
     display_name: str = Field(..., description="Human-readable name")

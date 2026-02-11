@@ -4,6 +4,12 @@ import { useEffect, useState, useCallback } from "react";
 import { apiFetch } from "../../lib/api";
 import RoleGuard from "../../components/RoleGuard";
 
+interface FrontierKey {
+  provider: string;
+  key_preview: string;
+  key_length: number;
+}
+
 interface FrontierModel {
   model_id: string;
   display_name: string;
@@ -11,6 +17,15 @@ interface FrontierModel {
   api_base_url: string;
   default_model_name: string | null;
 }
+
+const PROVIDER_DEFAULTS: Record<string, string> = {
+  openai: "https://api.openai.com/v1",
+  anthropic: "https://api.anthropic.com/v1",
+  google: "https://generativelanguage.googleapis.com/v1beta",
+  groq: "https://api.groq.com/openai/v1",
+  grok: "https://api.x.ai/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+};
 
 interface SweepModel {
   model_id: string;
@@ -47,6 +62,7 @@ export default function FrontierPage() {
 }
 
 function FrontierContent() {
+  const [frontierKeys, setFrontierKeys] = useState<FrontierKey[]>([]);
   const [models, setModels] = useState<FrontierModel[]>([]);
   const [sweeps, setSweeps] = useState<RecentSweep[]>([]);
   const [activeSweep, setActiveSweep] = useState<SweepProgress | null>(null);
@@ -65,10 +81,12 @@ function FrontierContent() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [modelsRes, sweepsRes] = await Promise.all([
+      const [keysRes, modelsRes, sweepsRes] = await Promise.all([
+        apiFetch<FrontierKey[]>("/api/v1/admin/frontier-keys"),
         apiFetch<{ models: FrontierModel[] }>("/api/v1/admin/frontier-models"),
         apiFetch<{ sweeps: RecentSweep[] }>("/api/v1/admin/frontier-sweeps"),
       ]);
+      setFrontierKeys(Array.isArray(keysRes) ? keysRes : []);
       setModels(modelsRes.models || []);
       setSweeps(sweepsRes.sweeps || []);
       setError(null);
@@ -180,6 +198,27 @@ function FrontierContent() {
 
   return (
     <div className="space-y-8">
+      {/* Configured API Keys */}
+      {frontierKeys.length > 0 && (
+        <section>
+          <h2 className="text-xl font-bold text-gray-900 mb-4">Configured API Keys</h2>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {frontierKeys.map((k) => (
+              <div
+                key={k.provider}
+                className="bg-white shadow rounded-lg px-4 py-3 flex items-center gap-3"
+              >
+                <span className="text-green-500 text-lg">&#10003;</span>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-gray-900 capitalize">{k.provider}</div>
+                  <div className="text-xs text-gray-500 font-mono truncate">{k.key_preview}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Model Registry */}
       <section>
         <div className="flex items-center justify-between mb-4">
@@ -195,7 +234,39 @@ function FrontierContent() {
         {showAddForm && (
           <div className="bg-white shadow rounded-lg p-4 mb-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {(["model_id", "display_name", "provider", "api_base_url", "default_model_name"] as const).map((field) => (
+              {(["model_id", "display_name"] as const).map((field) => (
+                <div key={field}>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    {field.replace(/_/g, " ")}
+                  </label>
+                  <input
+                    type="text"
+                    value={newModel[field]}
+                    onChange={(e) => setNewModel({ ...newModel, [field]: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+              ))}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">provider</label>
+                <select
+                  value={newModel.provider}
+                  onChange={(e) => {
+                    const provider = e.target.value;
+                    const baseUrl = PROVIDER_DEFAULTS[provider] || newModel.api_base_url;
+                    setNewModel({ ...newModel, provider, api_base_url: baseUrl });
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                >
+                  <option value="">Select provider...</option>
+                  {frontierKeys.map((k) => (
+                    <option key={k.provider} value={k.provider}>
+                      {k.provider}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {(["api_base_url", "default_model_name"] as const).map((field) => (
                 <div key={field}>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     {field.replace(/_/g, " ")}
