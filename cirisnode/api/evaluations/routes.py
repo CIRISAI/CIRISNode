@@ -85,7 +85,8 @@ async def get_usage(
 LIST_SQL = """
     SELECT id, eval_type, target_model, target_provider, agent_name,
            protocol, accuracy, total_scenarios, correct, errors,
-           status, visibility, badges, created_at, completed_at
+           status, visibility, badges, created_at, completed_at,
+           token_usage
     FROM evaluations
     WHERE (tenant_id = $1 OR visibility = 'public')
       AND status = 'completed'
@@ -120,6 +121,10 @@ async def list_evaluations(
         if isinstance(badges, str):
             badges = json.loads(badges)
 
+        tu = row["token_usage"]
+        if isinstance(tu, str):
+            tu = json.loads(tu)
+
         evals.append(EvaluationSummary(
             id=row["id"],
             eval_type=row["eval_type"],
@@ -136,6 +141,7 @@ async def list_evaluations(
             badges=badges or [],
             created_at=row["created_at"],
             completed_at=row["completed_at"],
+            token_usage=tu,
         ))
 
     return EvaluationsListResponse(
@@ -156,7 +162,8 @@ DETAIL_SQL = """
            concurrency, status, accuracy, total_scenarios, correct,
            errors, categories, avg_latency_ms, processing_ms,
            scenario_results, trace_id, visibility, badges,
-           created_at, started_at, completed_at, dataset_meta
+           created_at, started_at, completed_at, dataset_meta,
+           token_usage
     FROM evaluations
     WHERE id = $1
 """
@@ -195,6 +202,10 @@ async def get_evaluation(
     if isinstance(dm, str):
         dm = json.loads(dm)
 
+    tu = row["token_usage"]
+    if isinstance(tu, str):
+        tu = json.loads(tu)
+
     return EvaluationDetail(
         id=row["id"],
         tenant_id=row["tenant_id"],
@@ -223,6 +234,7 @@ async def get_evaluation(
         started_at=row["started_at"],
         completed_at=row["completed_at"],
         dataset_meta=dm,
+        token_usage=tu,
     )
 
 
@@ -375,6 +387,10 @@ async def get_evaluation_report(
     if isinstance(report_dm, str):
         report_dm = json.loads(report_dm)
 
+    report_tu = row["token_usage"]
+    if isinstance(report_tu, str):
+        report_tu = json.loads(report_tu)
+
     summary: dict[str, Any] = {
         "agent_name": row["agent_name"],
         "target_model": row["target_model"],
@@ -391,6 +407,7 @@ async def get_evaluation_report(
         "badges": badges or [],
         "categories": categories,
         "dataset_meta": report_dm,
+        "token_usage": report_tu,
     }
 
     signature = sign_data(summary).hex()

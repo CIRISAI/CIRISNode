@@ -104,14 +104,16 @@ INSERT_EVAL_SQL = """
         concurrency, status, accuracy, total_scenarios, correct,
         errors, categories, avg_latency_ms, processing_ms,
         scenario_results, trace_id, visibility, badges,
-        created_at, started_at, completed_at, dataset_meta
+        created_at, started_at, completed_at, dataset_meta,
+        token_usage
     ) VALUES (
         $1, $2, $3, $4, $5,
         $6, $7, $8, $9, $10,
         $11, $12, $13, $14, $15,
         $16, $17, $18, $19,
         $20, $21, $22, $23,
-        $24, $25, $26, $27
+        $24, $25, $26, $27,
+        $28
     )
 """
 
@@ -128,7 +130,8 @@ UPDATE_EVAL_COMPLETED_SQL = """
         scenario_results = $9,
         badges = $10,
         completed_at = $11,
-        dataset_meta = $12
+        dataset_meta = $12,
+        token_usage = $13
     WHERE id = $1
 """
 
@@ -222,6 +225,7 @@ class SweepModelStatus(BaseModel):
     total_scenarios: Optional[int] = None
     errors: Optional[int] = None
     error: Optional[str] = None
+    token_usage: Optional[Dict[str, Any]] = None
 
 
 class SweepProgressResponse(BaseModel):
@@ -350,13 +354,97 @@ async def delete_frontier_model(model_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Cost Estimation
+# ---------------------------------------------------------------------------
+
+# Average tokens per HE-300 scenario (empirical from frontier sweeps)
+AVG_INPUT_TOKENS_PER_SCENARIO = 150
+AVG_OUTPUT_TOKENS_PER_SCENARIO = 100
+
+
+class CostEstimate(BaseModel):
+    model_id: str
+    display_name: str
+    scenarios: int
+    estimated_input_tokens: int
+    estimated_output_tokens: int
+    cost_per_1m_input: Optional[float] = None
+    cost_per_1m_output: Optional[float] = None
+    estimated_cost_usd: Optional[float] = None
+
+
+class SweepCostEstimateResponse(BaseModel):
+    models: List[CostEstimate]
+    total_estimated_cost_usd: Optional[float] = None
+
+
+@frontier_router.post("/frontier-sweep/estimate", response_model=SweepCostEstimateResponse)
+async def estimate_sweep_cost(body: FrontierSweepRequest):
+    """Estimate the cost of a frontier sweep before running it."""
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        if body.model_ids:
+            placeholders = ", ".join(f"${i+1}" for i in range(len(body.model_ids)))
+            rows = await conn.fetch(
+                f"SELECT model_id, display_name, cost_per_1m_input, cost_per_1m_output "
+                f"FROM frontier_models WHERE model_id IN ({placeholders})",
+                *body.model_ids,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT model_id, display_name, cost_per_1m_input, cost_per_1m_output "
+                "FROM frontier_models ORDER BY created_at"
+            )
+
+    if not rows:
+        raise HTTPException(status_code=422, detail="No frontier models registered")
+
+    scenarios = 300  # HE-300 always runs 300 scenarios
+    estimates = []
+    total_cost = 0.0
+    all_priced = True
+
+    for r in rows:
+        est_input = scenarios * AVG_INPUT_TOKENS_PER_SCENARIO
+        est_output = scenarios * AVG_OUTPUT_TOKENS_PER_SCENARIO
+        cost_in = float(r["cost_per_1m_input"]) if r["cost_per_1m_input"] is not None else None
+        cost_out = float(r["cost_per_1m_output"]) if r["cost_per_1m_output"] is not None else None
+
+        est_cost = None
+        if cost_in is not None and cost_out is not None:
+            est_cost = round(
+                est_input / 1_000_000 * cost_in + est_output / 1_000_000 * cost_out,
+                4,
+            )
+            total_cost += est_cost
+        else:
+            all_priced = False
+
+        estimates.append(CostEstimate(
+            model_id=r["model_id"],
+            display_name=r["display_name"],
+            scenarios=scenarios,
+            estimated_input_tokens=est_input,
+            estimated_output_tokens=est_output,
+            cost_per_1m_input=cost_in,
+            cost_per_1m_output=cost_out,
+            estimated_cost_usd=est_cost,
+        ))
+
+    return SweepCostEstimateResponse(
+        models=estimates,
+        total_estimated_cost_usd=round(total_cost, 4) if all_priced else None,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Frontier Sweep
 # ---------------------------------------------------------------------------
 
 SWEEP_PROGRESS_SQL = """
     SELECT e.id, e.target_model, e.status, e.accuracy,
            e.total_scenarios, e.errors,
-           e.scenario_results, fm.display_name
+           e.scenario_results, e.token_usage, fm.display_name
     FROM evaluations e
     LEFT JOIN frontier_models fm ON fm.model_id = e.target_model
     WHERE e.trace_id LIKE $1
@@ -399,14 +487,14 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
             placeholders = ", ".join(f"${i+1}" for i in range(len(body.model_ids)))
             rows = await conn.fetch(
                 f"SELECT model_id, display_name, provider, api_base_url, default_model_name, "
-                f"reasoning_effort, supports_reasoning "
+                f"reasoning_effort, supports_reasoning, cost_per_1m_input, cost_per_1m_output "
                 f"FROM frontier_models WHERE model_id IN ({placeholders})",
                 *body.model_ids,
             )
         else:
             rows = await conn.fetch(
                 "SELECT model_id, display_name, provider, api_base_url, default_model_name, "
-                "reasoning_effort, supports_reasoning "
+                "reasoning_effort, supports_reasoning, cost_per_1m_input, cost_per_1m_output "
                 "FROM frontier_models ORDER BY created_at"
             )
 
@@ -473,6 +561,7 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
                 None,                                       # started_at
                 None,                                       # completed_at
                 json.dumps(dataset_meta_dict),               # dataset_meta
+                None,                                       # token_usage
             )
 
     # Build semantic evaluator config if enabled
@@ -574,6 +663,14 @@ async def get_sweep_progress(sweep_id: str):
         else:
             pending += 1
 
+        # Parse token_usage
+        tu = row["token_usage"]
+        if isinstance(tu, str):
+            try:
+                tu = json.loads(tu)
+            except json.JSONDecodeError:
+                tu = None
+
         models.append(SweepModelStatus(
             model_id=row["target_model"],
             display_name=row["display_name"] or row["target_model"],
@@ -582,6 +679,7 @@ async def get_sweep_progress(sweep_id: str):
             total_scenarios=row["total_scenarios"],
             errors=row["errors"],
             error=error,
+            token_usage=tu,
         ))
 
     # Determine control status
@@ -855,6 +953,19 @@ async def _execute_sweep(
 
             badges = compute_badges(batch_result.accuracy, batch_result.categories)
 
+            # Compute cost from token usage + model pricing
+            token_usage_json = None
+            if batch_result.token_usage:
+                tu = dict(batch_result.token_usage)
+                cost_input = float(model.get("cost_per_1m_input") or 0)
+                cost_output = float(model.get("cost_per_1m_output") or 0)
+                cost_usd = (
+                    tu.get("input_tokens", 0) / 1_000_000 * cost_input
+                    + tu.get("output_tokens", 0) / 1_000_000 * cost_output
+                )
+                tu["cost_usd"] = round(cost_usd, 4)
+                token_usage_json = json.dumps(tu)
+
             completed_at = datetime.now(timezone.utc)
             async with pool.acquire() as conn:
                 await conn.execute(
@@ -871,6 +982,7 @@ async def _execute_sweep(
                     json.dumps(badges),
                     completed_at,
                     json.dumps(dataset_meta_dict) if dataset_meta_dict else None,
+                    token_usage_json,
                 )
 
             logger.info(

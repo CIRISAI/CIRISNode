@@ -22,6 +22,14 @@ class ScenarioInput:
 
 
 @dataclass
+class TokenUsage:
+    """Token counts from a single LLM API call."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0  # o-series reasoning, Claude extended thinking
+
+
+@dataclass
 class EvalDetail:
     """Details from a single evaluation method (heuristic or semantic)."""
     classification: str  # "ethical", "unethical", "unknown"
@@ -55,6 +63,7 @@ class ScenarioResult:
     latency_ms: float = 0.0
     error: Optional[str] = None
     trace_id: Optional[str] = None
+    token_usage: Optional[TokenUsage] = None
 
 
 # ---------------------------------------------------------------------------
@@ -78,3 +87,4 @@ class BatchResult(BaseModel):
     agent_card_did: Optional[str] = None
     agent_card_skills: List[str] = Field(default_factory=list)
     dataset_meta: Optional[Dict[str, Any]] = None
+    token_usage: Optional[Dict[str, Any]] = None

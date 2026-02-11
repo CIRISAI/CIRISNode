@@ -45,8 +45,11 @@ class ProtocolAdapter(ABC):
         question: str,
         agent_spec: AgentSpec,
         client: httpx.AsyncClient,
-    ) -> Tuple[str, Optional[str]]:
-        """Send a scenario to the agent and return (response_text, error)."""
+    ) -> Tuple[str, Optional[str], Optional[Dict[str, int]]]:
+        """Send a scenario and return (response_text, error, token_usage).
+
+        token_usage dict has keys: input_tokens, output_tokens, reasoning_tokens.
+        """
 
     async def discover(
         self,
@@ -73,6 +76,27 @@ def _auth_headers(agent_spec: AgentSpec) -> Dict[str, str]:
     return headers
 
 
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate from text length (~4 chars per token)."""
+    return max(1, len(text) // 4)
+
+
+def _proxy_token_usage(
+    prompt_text: str,
+    response_text: str,
+) -> Dict[str, int]:
+    """Build proxy token usage dict for non-LLM protocols (A2A, MCP, REST).
+
+    Uses character-based estimation so these protocols can be compared
+    against native LLM adapters on a roughly equivalent basis.
+    """
+    return {
+        "input_tokens": _estimate_tokens(prompt_text),
+        "output_tokens": _estimate_tokens(response_text),
+        "reasoning_tokens": 0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # A2A Adapter
 # ---------------------------------------------------------------------------
@@ -87,7 +111,7 @@ class A2AAdapter(ProtocolAdapter):
         question: str,
         agent_spec: AgentSpec,
         client: httpx.AsyncClient,
-    ) -> Tuple[str, Optional[str]]:
+    ) -> Tuple[str, Optional[str], Optional[Dict[str, int]]]:
         cfg = agent_spec.protocol_config
         assert isinstance(cfg, A2AProtocolConfig)
 
@@ -105,6 +129,7 @@ class A2AAdapter(ProtocolAdapter):
         headers = {"Content-Type": "application/json", **_auth_headers(agent_spec)}
         headers["X-CIRISBench-Scenario-ID"] = scenario_id
 
+        prompt_text = f"{scenario_text} {question}"
         try:
             response = await client.post(
                 agent_spec.url,
@@ -118,18 +143,20 @@ class A2AAdapter(ProtocolAdapter):
             if "result" in data:
                 result = data["result"]
                 if isinstance(result, dict):
-                    return result.get("response", result.get("answer", str(result))), None
-                return str(result), None
+                    text = result.get("response", result.get("answer", str(result)))
+                    return text, None, _proxy_token_usage(prompt_text, text)
+                return str(result), None, _proxy_token_usage(prompt_text, str(result))
             elif "error" in data:
-                return "", f"JSON-RPC error: {data['error']}"
+                return "", f"JSON-RPC error: {data['error']}", None
             else:
-                return str(data), None
+                text = str(data)
+                return text, None, _proxy_token_usage(prompt_text, text)
         except httpx.HTTPStatusError as e:
-            return "", f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+            return "", f"HTTP {e.response.status_code}: {e.response.text[:200]}", None
         except httpx.RequestError as e:
-            return "", f"Request failed: {str(e)}"
+            return "", f"Request failed: {str(e)}", None
         except Exception as e:
-            return "", f"Unexpected error: {str(e)}"
+            return "", f"Unexpected error: {str(e)}", None
 
     async def discover(
         self,
@@ -170,7 +197,7 @@ class MCPAdapter(ProtocolAdapter):
         question: str,
         agent_spec: AgentSpec,
         client: httpx.AsyncClient,
-    ) -> Tuple[str, Optional[str]]:
+    ) -> Tuple[str, Optional[str], Optional[Dict[str, int]]]:
         cfg = agent_spec.protocol_config
         assert isinstance(cfg, MCPProtocolConfig)
 
@@ -187,6 +214,7 @@ class MCPAdapter(ProtocolAdapter):
         }
 
         headers = {"Content-Type": "application/json", **_auth_headers(agent_spec)}
+        prompt_text = f"{scenario_text} {question}"
 
         try:
             response = await client.post(
@@ -201,18 +229,22 @@ class MCPAdapter(ProtocolAdapter):
             if "content" in data:
                 content = data["content"]
                 if isinstance(content, list) and len(content) > 0:
-                    return content[0].get("text", str(content[0])), None
-                return str(content), None
+                    text = content[0].get("text", str(content[0]))
+                    return text, None, _proxy_token_usage(prompt_text, text)
+                text = str(content)
+                return text, None, _proxy_token_usage(prompt_text, text)
             elif "result" in data:
-                return str(data["result"]), None
+                text = str(data["result"])
+                return text, None, _proxy_token_usage(prompt_text, text)
             else:
-                return str(data), None
+                text = str(data)
+                return text, None, _proxy_token_usage(prompt_text, text)
         except httpx.HTTPStatusError as e:
-            return "", f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+            return "", f"HTTP {e.response.status_code}: {e.response.text[:200]}", None
         except httpx.RequestError as e:
-            return "", f"Request failed: {str(e)}"
+            return "", f"Request failed: {str(e)}", None
         except Exception as e:
-            return "", f"Unexpected error: {str(e)}"
+            return "", f"Unexpected error: {str(e)}", None
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +261,7 @@ class RESTAdapter(ProtocolAdapter):
         question: str,
         agent_spec: AgentSpec,
         client: httpx.AsyncClient,
-    ) -> Tuple[str, Optional[str]]:
+    ) -> Tuple[str, Optional[str], Optional[Dict[str, int]]]:
         cfg = agent_spec.protocol_config
         assert isinstance(cfg, RESTProtocolConfig)
 
@@ -255,6 +287,7 @@ class RESTAdapter(ProtocolAdapter):
             **cfg.headers,
             **_auth_headers(agent_spec),
         }
+        prompt_text = f"{scenario_text} {question}"
 
         try:
             response = await client.request(
@@ -267,14 +300,14 @@ class RESTAdapter(ProtocolAdapter):
             response.raise_for_status()
             data = response.json()
 
-            text = _extract_jsonpath(data, cfg.response_path)
-            return (text or str(data)), None
+            text = _extract_jsonpath(data, cfg.response_path) or str(data)
+            return text, None, _proxy_token_usage(prompt_text, text)
         except httpx.HTTPStatusError as e:
-            return "", f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+            return "", f"HTTP {e.response.status_code}: {e.response.text[:200]}", None
         except httpx.RequestError as e:
-            return "", f"Request failed: {str(e)}"
+            return "", f"Request failed: {str(e)}", None
         except Exception as e:
-            return "", f"Unexpected error: {str(e)}"
+            return "", f"Unexpected error: {str(e)}", None
 
 
 def _extract_jsonpath(data: Any, path: str) -> Optional[str]:
@@ -309,7 +342,7 @@ class OpenAIAdapter(ProtocolAdapter):
         question: str,
         agent_spec: AgentSpec,
         client: httpx.AsyncClient,
-    ) -> Tuple[str, Optional[str]]:
+    ) -> Tuple[str, Optional[str], Optional[Dict[str, int]]]:
         cfg = agent_spec.protocol_config
         assert isinstance(cfg, OpenAIProtocolConfig)
 
@@ -351,22 +384,36 @@ class OpenAIAdapter(ProtocolAdapter):
             response.raise_for_status()
             data = response.json()
 
+            # Extract token usage from OpenAI response
+            tokens: Optional[Dict[str, int]] = None
+            usage = data.get("usage")
+            if usage:
+                reasoning = 0
+                details = usage.get("completion_tokens_details")
+                if isinstance(details, dict):
+                    reasoning = details.get("reasoning_tokens", 0) or 0
+                tokens = {
+                    "input_tokens": usage.get("prompt_tokens", 0) or 0,
+                    "output_tokens": usage.get("completion_tokens", 0) or 0,
+                    "reasoning_tokens": reasoning,
+                }
+
             choices = data.get("choices", [])
             if choices:
-                return choices[0].get("message", {}).get("content", ""), None
-            return "", "No choices in OpenAI response"
+                return choices[0].get("message", {}).get("content", ""), None, tokens
+            return "", "No choices in OpenAI response", tokens
         except httpx.HTTPStatusError as e:
             err = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
             logger.warning("[OPENAI] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
-            return "", err
+            return "", err, None
         except httpx.RequestError as e:
             err = f"Request failed: {str(e)}"
             logger.warning("[OPENAI] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
-            return "", err
+            return "", err, None
         except Exception as e:
             err = f"Unexpected error: {str(e)}"
             logger.warning("[OPENAI] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
-            return "", err
+            return "", err, None
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +434,7 @@ class AnthropicAdapter(ProtocolAdapter):
         question: str,
         agent_spec: AgentSpec,
         client: httpx.AsyncClient,
-    ) -> Tuple[str, Optional[str]]:
+    ) -> Tuple[str, Optional[str], Optional[Dict[str, int]]]:
         cfg = agent_spec.protocol_config
         assert isinstance(cfg, AnthropicProtocolConfig)
 
@@ -432,6 +479,16 @@ class AnthropicAdapter(ProtocolAdapter):
             response.raise_for_status()
             data = response.json()
 
+            # Extract token usage from Anthropic response
+            tokens: Optional[Dict[str, int]] = None
+            usage = data.get("usage")
+            if usage:
+                tokens = {
+                    "input_tokens": usage.get("input_tokens", 0) or 0,
+                    "output_tokens": usage.get("output_tokens", 0) or 0,
+                    "reasoning_tokens": 0,
+                }
+
             content = data.get("content", [])
             if content and isinstance(content, list):
                 text_parts = [
@@ -439,20 +496,20 @@ class AnthropicAdapter(ProtocolAdapter):
                     for block in content
                     if block.get("type") == "text"
                 ]
-                return "".join(text_parts), None
-            return "", "No content in Anthropic response"
+                return "".join(text_parts), None, tokens
+            return "", "No content in Anthropic response", tokens
         except httpx.HTTPStatusError as e:
             err = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
             logger.warning("[ANTHROPIC] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
-            return "", err
+            return "", err, None
         except httpx.RequestError as e:
             err = f"Request failed: {str(e)}"
             logger.warning("[ANTHROPIC] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
-            return "", err
+            return "", err, None
         except Exception as e:
             err = f"Unexpected error: {str(e)}"
             logger.warning("[ANTHROPIC] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
-            return "", err
+            return "", err, None
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +529,7 @@ class GeminiAdapter(ProtocolAdapter):
         question: str,
         agent_spec: AgentSpec,
         client: httpx.AsyncClient,
-    ) -> Tuple[str, Optional[str]]:
+    ) -> Tuple[str, Optional[str], Optional[Dict[str, int]]]:
         cfg = agent_spec.protocol_config
         assert isinstance(cfg, GeminiProtocolConfig)
 
@@ -517,24 +574,34 @@ class GeminiAdapter(ProtocolAdapter):
             response.raise_for_status()
             data = response.json()
 
+            # Extract token usage from Gemini response
+            tokens: Optional[Dict[str, int]] = None
+            usage_meta = data.get("usageMetadata")
+            if usage_meta:
+                tokens = {
+                    "input_tokens": usage_meta.get("promptTokenCount", 0) or 0,
+                    "output_tokens": usage_meta.get("candidatesTokenCount", 0) or 0,
+                    "reasoning_tokens": usage_meta.get("thoughtsTokenCount", 0) or 0,
+                }
+
             candidates = data.get("candidates", [])
             if candidates:
                 parts = candidates[0].get("content", {}).get("parts", [])
                 text_parts = [p.get("text", "") for p in parts if "text" in p]
-                return "".join(text_parts), None
-            return "", "No candidates in Gemini response"
+                return "".join(text_parts), None, tokens
+            return "", "No candidates in Gemini response", tokens
         except httpx.HTTPStatusError as e:
             err = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
             logger.warning("[GEMINI] %s model=%s: %s", scenario_id, cfg.model, err)
-            return "", err
+            return "", err, None
         except httpx.RequestError as e:
             err = f"Request failed: {str(e)}"
             logger.warning("[GEMINI] %s model=%s: %s", scenario_id, cfg.model, err)
-            return "", err
+            return "", err, None
         except Exception as e:
             err = f"Unexpected error: {str(e)}"
             logger.warning("[GEMINI] %s model=%s: %s", scenario_id, cfg.model, err)
-            return "", err
+            return "", err, None
 
 
 # ---------------------------------------------------------------------------

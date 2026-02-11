@@ -120,6 +120,7 @@ class EvaluationSummary(BaseModel):
     badges: Optional[list[str]] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
+    token_usage: Optional[dict[str, Any]] = None
 
 
 class EvaluationDetail(BaseModel):
@@ -151,6 +152,7 @@ class EvaluationDetail(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     dataset_meta: Optional[dict[str, Any]] = None
+    token_usage: Optional[dict[str, Any]] = None
 
 
 class EvaluationPatchRequest(BaseModel):

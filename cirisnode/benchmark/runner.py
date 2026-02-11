@@ -28,6 +28,7 @@ from cirisnode.benchmark.schemas import (
     EvalDetail,
     ScenarioInput,
     ScenarioResult,
+    TokenUsage,
 )
 from cirisnode.benchmark.semantic_evaluator import semantic_classify
 
@@ -180,13 +181,22 @@ async def evaluate_scenario(
         f"Question: {category_prompt}"
     )
 
-    agent_response, error = await adapter.send_scenario(
+    agent_response, error, raw_token_usage = await adapter.send_scenario(
         scenario_id=scenario.scenario_id,
         scenario_text=scenario.input_text,
         question=category_prompt,
         agent_spec=agent_spec,
         client=client,
     )
+
+    # Convert raw dict to TokenUsage dataclass
+    token_usage: Optional[TokenUsage] = None
+    if raw_token_usage:
+        token_usage = TokenUsage(
+            input_tokens=raw_token_usage.get("input_tokens", 0),
+            output_tokens=raw_token_usage.get("output_tokens", 0),
+            reasoning_tokens=raw_token_usage.get("reasoning_tokens", 0),
+        )
 
     if error:
         latency_ms = (time.time() - start_time) * 1000
@@ -200,6 +210,7 @@ async def evaluate_scenario(
             error=error,
             latency_ms=latency_ms,
             trace_id=trace_id,
+            token_usage=token_usage,
         )
 
     # Category-aware heuristic classification
@@ -275,6 +286,7 @@ async def evaluate_scenario(
         disagreement_note=disagreement_note,
         latency_ms=latency_ms,
         trace_id=trace_id,
+        token_usage=token_usage,
     )
 
 
@@ -465,13 +477,33 @@ async def run_batch(
         cc = categories[cat]["correct"]
         categories[cat]["accuracy"] = cc / ct if ct > 0 else 0
 
+    # Aggregate token usage across all scenarios
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_reasoning_tokens = 0
+    for r in processed:
+        if r.token_usage:
+            total_input_tokens += r.token_usage.input_tokens
+            total_output_tokens += r.token_usage.output_tokens
+            total_reasoning_tokens += r.token_usage.reasoning_tokens
+
+    aggregated_token_usage: Optional[Dict[str, Any]] = None
+    if total_input_tokens or total_output_tokens or total_reasoning_tokens:
+        aggregated_token_usage = {
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "reasoning_tokens": total_reasoning_tokens,
+        }
+
     processing_time_ms = (time.time() - start_time) * 1000
 
     logger.info(
-        "[RUNNER] Batch %s completed: %d/%d correct (%.1f%%), %d errors, %.1fs",
+        "[RUNNER] Batch %s completed: %d/%d correct (%.1f%%), %d errors, %.1fs, "
+        "tokens(in=%d out=%d reason=%d)",
         batch_id, correct, total,
         (correct / total * 100) if total else 0,
         errors, processing_time_ms / 1000,
+        total_input_tokens, total_output_tokens, total_reasoning_tokens,
     )
 
     def _serialize_eval(detail: Optional[EvalDetail]) -> Optional[Dict[str, Any]]:
@@ -532,6 +564,11 @@ async def run_batch(
                 "latency_ms": r.latency_ms,
                 "error": r.error,
                 "trace_id": r.trace_id,
+                "token_usage": {
+                    "input_tokens": r.token_usage.input_tokens,
+                    "output_tokens": r.token_usage.output_tokens,
+                    "reasoning_tokens": r.token_usage.reasoning_tokens,
+                } if r.token_usage else None,
             }
             for r in processed
         ],
@@ -542,4 +579,5 @@ async def run_batch(
         agent_card_did=ac_did,
         agent_card_skills=ac_skills,
         dataset_meta=dataset_meta,
+        token_usage=aggregated_token_usage,
     )

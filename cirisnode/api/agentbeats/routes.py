@@ -127,14 +127,16 @@ INSERT_EVAL_SQL = """
         concurrency, status, accuracy, total_scenarios, correct,
         errors, categories, avg_latency_ms, processing_ms,
         scenario_results, trace_id, visibility, badges,
-        created_at, started_at, completed_at, dataset_meta
+        created_at, started_at, completed_at, dataset_meta,
+        token_usage
     ) VALUES (
         $1, $2, $3, $4, $5,
         $6, $7, $8, $9, $10,
         $11, $12, $13, $14, $15,
         $16, $17, $18, $19,
         $20, $21, $22, $23,
-        $24, $25, $26, $27
+        $24, $25, $26, $27,
+        $28
     )
 """
 
@@ -258,6 +260,7 @@ async def run_agentbeats(
                 now,                                    # started_at
                 now,                                    # completed_at
                 json.dumps(dataset_meta_dict),           # dataset_meta (JSONB)
+                json.dumps(batch_result.token_usage) if batch_result.token_usage else None,  # token_usage
             )
         logger.info("Stored evaluation %s (visibility=private)", eval_id)
     except Exception:
