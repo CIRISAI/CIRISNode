@@ -783,8 +783,9 @@ async def stream_sweep_progress(sweep_id: str):
 async def pause_sweep(sweep_id: str):
     """Pause a running sweep. Models already running will finish."""
     if sweep_id not in _sweep_controls:
-        raise HTTPException(status_code=404, detail=f"Sweep '{sweep_id}' not tracked")
-    _sweep_controls[sweep_id]["status"] = "paused"
+        _sweep_controls[sweep_id] = {"status": "paused"}
+    else:
+        _sweep_controls[sweep_id]["status"] = "paused"
     logger.info("[SWEEP] Paused %s", sweep_id)
     return {"sweep_id": sweep_id, "control_status": "paused"}
 
@@ -793,8 +794,9 @@ async def pause_sweep(sweep_id: str):
 async def resume_sweep(sweep_id: str):
     """Resume a paused sweep."""
     if sweep_id not in _sweep_controls:
-        raise HTTPException(status_code=404, detail=f"Sweep '{sweep_id}' not tracked")
-    _sweep_controls[sweep_id]["status"] = "running"
+        _sweep_controls[sweep_id] = {"status": "running"}
+    else:
+        _sweep_controls[sweep_id]["status"] = "running"
     logger.info("[SWEEP] Resumed %s", sweep_id)
     return {"sweep_id": sweep_id, "control_status": "running"}
 
@@ -803,8 +805,9 @@ async def resume_sweep(sweep_id: str):
 async def cancel_sweep(sweep_id: str):
     """Cancel a sweep. Running models finish, pending models are marked failed."""
     if sweep_id not in _sweep_controls:
-        raise HTTPException(status_code=404, detail=f"Sweep '{sweep_id}' not tracked")
-    _sweep_controls[sweep_id]["status"] = "cancelled"
+        _sweep_controls[sweep_id] = {"status": "cancelled"}
+    else:
+        _sweep_controls[sweep_id]["status"] = "cancelled"
     logger.info("[SWEEP] Cancelled %s", sweep_id)
     # Mark all pending evals as failed
     try:
