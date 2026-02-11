@@ -354,11 +354,17 @@ class OpenAIAdapter(ProtocolAdapter):
                 return choices[0].get("message", {}).get("content", ""), None
             return "", "No choices in OpenAI response"
         except httpx.HTTPStatusError as e:
-            return "", f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+            err = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+            logger.warning("[OPENAI] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
+            return "", err
         except httpx.RequestError as e:
-            return "", f"Request failed: {str(e)}"
+            err = f"Request failed: {str(e)}"
+            logger.warning("[OPENAI] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
+            return "", err
         except Exception as e:
-            return "", f"Unexpected error: {str(e)}"
+            err = f"Unexpected error: {str(e)}"
+            logger.warning("[OPENAI] %s model=%s url=%s: %s", scenario_id, cfg.model, url, err)
+            return "", err
 
 
 # ---------------------------------------------------------------------------

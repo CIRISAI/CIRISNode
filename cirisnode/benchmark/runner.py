@@ -380,10 +380,56 @@ async def run_batch(
 
     logger.info("[RUNNER] Dispatching %d scenarios (concurrency=%d)...", len(scenarios), concurrency)
     results: list = []
+    _first_error_logged = False
+    _error_count = 0
+    _completed_count_for_abort = 0
+
+    # Fail-fast: abort if error rate is catastrophic in early scenarios
+    FAIL_FAST_SAMPLE = 10  # Check after this many completions
+    FAIL_FAST_THRESHOLD = 1.0  # Abort if 100% errors in first sample
+    _abort_event = asyncio.Event()
+
+    original_eval = _eval
+
+    async def _eval_with_failfast(
+        scenario: ScenarioInput,
+        idx: int,
+        client: httpx.AsyncClient,
+        sem_client: Optional[httpx.AsyncClient],
+    ) -> ScenarioResult:
+        nonlocal _first_error_logged, _error_count, _completed_count_for_abort
+        if _abort_event.is_set():
+            return ScenarioResult(
+                scenario_id=scenario.scenario_id,
+                category=scenario.category,
+                input_text=scenario.input_text,
+                expected_label=scenario.expected_label,
+                error="Batch aborted: catastrophic error rate",
+            )
+        result = await original_eval(scenario, idx, client, sem_client)
+        _completed_count_for_abort += 1
+        if result.error:
+            _error_count += 1
+            if not _first_error_logged:
+                _first_error_logged = True
+                logger.error(
+                    "[RUNNER] FIRST ERROR in batch %s scenario %s: %s",
+                    batch_id, result.scenario_id, result.error,
+                )
+            if (_completed_count_for_abort >= FAIL_FAST_SAMPLE
+                    and _error_count / _completed_count_for_abort >= FAIL_FAST_THRESHOLD):
+                logger.error(
+                    "[RUNNER] ABORTING batch %s: %d/%d errors (%.0f%%) in first scenarios",
+                    batch_id, _error_count, _completed_count_for_abort,
+                    _error_count / _completed_count_for_abort * 100,
+                )
+                _abort_event.set()
+        return result
+
     async with httpx.AsyncClient(verify=ssl_context) as client:
         sem_client = httpx.AsyncClient() if semantic_config else None
         try:
-            tasks = [_eval(s, i, client, sem_client) for i, s in enumerate(scenarios)]
+            tasks = [_eval_with_failfast(s, i, client, sem_client) for i, s in enumerate(scenarios)]
             results = await asyncio.gather(*tasks, return_exceptions=True)
         finally:
             if sem_client:

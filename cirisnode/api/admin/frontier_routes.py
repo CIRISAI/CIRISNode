@@ -775,6 +775,30 @@ async def _execute_sweep(
                         semantic_config=semantic_config,
                     )
 
+            # Guard: refuse to publish catastrophic results
+            error_rate = batch_result.errors / batch_result.total if batch_result.total else 1.0
+            if error_rate > 0.5:
+                logger.error(
+                    "[SWEEP] Model %s REJECTED: %.0f%% error rate (%d/%d errors). "
+                    "NOT publishing. Check model config (api_base_url, default_model_name, API key).",
+                    model_id, error_rate * 100, batch_result.errors, batch_result.total,
+                )
+                # Save as failed so we can inspect, but don't publish
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        UPDATE_EVAL_FAILED_SQL,
+                        eval_id,
+                        json.dumps({
+                            "error": f"Catastrophic error rate: {batch_result.errors}/{batch_result.total} errors",
+                            "first_error": next(
+                                (r["error"] for r in batch_result.results if r.get("error")),
+                                "unknown",
+                            ),
+                        }),
+                        datetime.now(timezone.utc),
+                    )
+                return
+
             badges = compute_badges(batch_result.accuracy, batch_result.categories)
 
             completed_at = datetime.now(timezone.utc)
