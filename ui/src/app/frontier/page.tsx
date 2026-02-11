@@ -87,12 +87,12 @@ function FrontierContent() {
     try {
       const [keysRes, modelsRes, sweepsRes] = await Promise.all([
         apiFetch<FrontierKey[]>("/api/v1/admin/frontier-keys", { token }),
-        apiFetch<{ models: FrontierModel[] }>("/api/v1/admin/frontier-models", { token }),
-        apiFetch<{ sweeps: RecentSweep[] }>("/api/v1/admin/frontier-sweeps", { token }),
+        apiFetch<FrontierModel[]>("/api/v1/admin/frontier-models", { token }),
+        apiFetch<RecentSweep[]>("/api/v1/admin/frontier-sweeps", { token }),
       ]);
       setFrontierKeys(Array.isArray(keysRes) ? keysRes : []);
-      setModels(modelsRes.models || []);
-      setSweeps(sweepsRes.sweeps || []);
+      setModels(Array.isArray(modelsRes) ? modelsRes : []);
+      setSweeps(Array.isArray(sweepsRes) ? sweepsRes : []);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load data");
@@ -125,7 +125,7 @@ function FrontierContent() {
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [activeSweep, fetchData]);
+  }, [activeSweep, fetchData, token]);
 
   const addModel = async () => {
     try {
@@ -152,12 +152,15 @@ function FrontierContent() {
     }
   };
 
-  const launchSweep = async () => {
-    if (!confirm("Launch frontier sweep across all registered models? This runs 300 scenarios per model.")) return;
+  const launchSweep = async (modelIds?: string[]) => {
+    const label = modelIds ? modelIds.join(", ") : "all registered models";
+    if (!confirm(`Launch frontier sweep for ${label}? This runs 300 scenarios per model.`)) return;
     try {
+      const body: Record<string, unknown> = { concurrency: 50 };
+      if (modelIds) body.model_ids = modelIds;
       const res = await apiFetch<{ sweep_id: string }>("/api/v1/admin/frontier-sweep", {
         method: "POST",
-        body: JSON.stringify({ concurrency: 50 }),
+        body: JSON.stringify(body),
         token,
       });
       const progress = await apiFetch<SweepProgress>(
@@ -316,7 +319,13 @@ function FrontierContent() {
                     <td className="px-4 py-3 text-sm">{m.display_name}</td>
                     <td className="px-4 py-3 text-sm text-gray-500">{m.provider}</td>
                     <td className="px-4 py-3 text-sm text-gray-500 truncate max-w-xs">{m.api_base_url}</td>
-                    <td className="px-4 py-3 text-sm">
+                    <td className="px-4 py-3 text-sm space-x-3">
+                      <button
+                        onClick={() => launchSweep([m.model_id])}
+                        className="text-indigo-600 hover:text-indigo-800 text-sm"
+                      >
+                        Run
+                      </button>
                       <button
                         onClick={() => deleteModel(m.model_id)}
                         className="text-red-600 hover:text-red-800 text-sm"
@@ -337,7 +346,7 @@ function FrontierContent() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold text-gray-900">Sweep Control</h2>
           <button
-            onClick={launchSweep}
+            onClick={() => launchSweep()}
             disabled={models.length === 0}
             className="px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >
