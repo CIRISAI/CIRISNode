@@ -350,7 +350,7 @@ async def list_frontier_models():
     ]
 
 
-@frontier_router.delete("/frontier-models/{model_id}")
+@frontier_router.delete("/frontier-models/{model_id:path}")
 async def delete_frontier_model(model_id: str):
     """Remove a frontier model from the registry."""
     pool = await get_pg_pool()

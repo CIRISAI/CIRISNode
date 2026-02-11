@@ -308,7 +308,7 @@ function FrontierContent() {
       onConfirm: async () => {
         setConfirmState(null);
         try {
-          await apiFetch(`/api/v1/admin/frontier-models/${modelId}`, { method: "DELETE", token });
+          await apiFetch(`/api/v1/admin/frontier-models/${encodeURIComponent(modelId)}`, { method: "DELETE", token });
           fetchData();
         } catch (err) {
           setToast({ type: "error", message: err instanceof Error ? err.message : "Failed to delete model" });
