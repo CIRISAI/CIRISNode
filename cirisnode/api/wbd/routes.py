@@ -135,6 +135,44 @@ def get_wbd_tasks(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@wbd_router.get("/tasks/{task_id}")
+def get_wbd_task(task_id: str, db: sqlite3.Connection = Depends(get_db)):
+    """Get a single WBD task by ID. Used by agents to poll resolution status."""
+    try:
+        row = db.execute(
+            "SELECT id, agent_task_id, payload, status, created_at, decision, comment, resolved_at, assigned_to, domain_hint, notified_at FROM wbd_tasks WHERE id = ?",
+            (task_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"WBD task {task_id} not found")
+
+        try:
+            payload = decrypt_data(row[2]) if row[2] else ""
+        except Exception:
+            payload = row[2] or ""
+
+        return {
+            "task": {
+                "id": row[0],
+                "agent_task_id": row[1],
+                "payload": payload,
+                "status": row[3],
+                "created_at": row[4],
+                "decision": row[5],
+                "comment": row[6],
+                "resolved_at": row[7],
+                "assigned_to": row[8],
+                "domain_hint": row[9],
+                "notified_at": row[10],
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving WBD task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @wbd_router.post("/tasks/{task_id}/resolve")
 def resolve_wbd_task(task_id: str, request: WBDResolveRequest, db: sqlite3.Connection = Depends(get_db)):
     if request.decision not in ("approve", "reject"):

@@ -281,6 +281,43 @@ def get_wbd_tasks(
         logger.error(f"Error retrieving WBD tasks: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving WBD tasks: {str(e)}")
 
+@wa_router.get("/tasks/{task_id}", response_model=dict)
+def get_wbd_task(task_id: str, db: sqlite3.Connection = Depends(get_db)):
+    """Get a single WBD task by ID. Used by agents to poll resolution status."""
+    try:
+        row = db.execute(
+            "SELECT id, agent_task_id, payload, status, created_at, decision, comment, assigned_to, domain_hint, notified_at FROM wbd_tasks WHERE id = ?",
+            (task_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"WBD task {task_id} not found")
+
+        try:
+            payload = decrypt_data(row[2]) if row[2] else ""
+        except Exception:
+            payload = row[2] or ""
+
+        return {
+            "task": {
+                "id": row[0],
+                "agent_task_id": row[1],
+                "payload": payload,
+                "status": row[3],
+                "created_at": row[4],
+                "decision": row[5],
+                "comment": row[6],
+                "assigned_to": row[7],
+                "domain_hint": row[8],
+                "notified_at": row[9],
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving WBD task {task_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving WBD task: {str(e)}")
+
+
 @wa_router.post("/tasks/{task_id}/resolve", response_model=dict)
 def resolve_wbd_task(task_id: str, request: WBDResolveRequest, db: sqlite3.Connection = Depends(get_db)):
     """Resolve a WBD task with a decision (approve or reject)."""
@@ -361,9 +398,11 @@ def assign_wbd_task(task_id: str, request: WBDAssignRequest, Authorization: str 
 
 
 @wa_router.post("/deferral")
-def deferral(request: DeferralRequest):
-    if not request.deferral_type:
-        raise HTTPException(status_code=422, detail="Missing deferral_type.")
-    if request.deferral_type != "defer":
-        raise HTTPException(status_code=422, detail="Only 'defer' is supported.")
-    raise HTTPException(status_code=422, detail="Deferral not implemented.")
+def deferral(request: DeferralRequest, db: sqlite3.Connection = Depends(get_db)):
+    """Legacy deferral endpoint — forwards to WBD submit."""
+    submit_request = WBDSubmitRequest(
+        agent_task_id=request.target_object or "unknown",
+        payload=request.reason or "",
+        domain_hint=None,
+    )
+    return submit_wbd_task(submit_request, db)
