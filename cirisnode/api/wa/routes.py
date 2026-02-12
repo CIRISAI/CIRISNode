@@ -406,3 +406,150 @@ def deferral(request: DeferralRequest, db: sqlite3.Connection = Depends(get_db))
         domain_hint=None,
     )
     return submit_wbd_task(submit_request, db)
+
+
+# ============================================================================
+# Covenant Invocation System (CIS)
+# ============================================================================
+
+from cirisnode.schema.cis_models import CovenantInvocationRequest as CISRequest
+import time as _time_mod
+
+
+@wa_router.post(
+    "/covenant-invocation",
+    dependencies=[Depends(require_role(["admin"]))],
+    response_model=dict,
+)
+def trigger_covenant_invocation(
+    cis_request: CISRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    Authorization: str = Header(...),
+):
+    """
+    Trigger a Covenant Invocation — signed shutdown directive for a target agent.
+
+    Requires admin JWT. Signs the invocation payload with the persistent WA key
+    and records it in the audit log. Delivery is via the agent events channel.
+    """
+    from cirisnode.schema.cis_models import CovenantInvocationPayload
+    from cirisnode.utils.signer import get_wa_private_key, sign_covenant_invocation
+    from cirisnode.config import settings
+
+    # Validate WA key is configured
+    wa_key = get_wa_private_key()
+    if wa_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="WA private key not configured — cannot sign covenant invocations",
+        )
+
+    wa_key_id = settings.CIRISNODE_WA_KEY_ID
+    if not wa_key_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="WA key ID not configured",
+        )
+
+    actor = get_actor_from_token(Authorization)
+    invocation_id = uuid.uuid4().hex
+
+    # Build the signed payload
+    payload = CovenantInvocationPayload(
+        type="covenant_invocation",
+        version="1.0",
+        target_agent_id=cis_request.target_agent_id,
+        directive=cis_request.directive,
+        reason=cis_request.reason,
+        incident_id=cis_request.incident_id or invocation_id,
+        authority_wa_id=wa_key_id,
+        issued_by=actor,
+        timestamp=int(_time_mod.time()),
+        deadline_seconds=cis_request.deadline_seconds,
+    )
+
+    # Sign the payload
+    payload_dict = payload.model_dump()
+    signature_hex = sign_covenant_invocation(payload_dict, wa_key)
+
+    # Record in DB for audit trail
+    try:
+        db.execute(
+            """INSERT INTO covenant_invocations
+               (id, target_agent_id, directive, reason, incident_id,
+                authority_wa_id, issued_by, signature, delivered, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+            (
+                invocation_id,
+                cis_request.target_agent_id,
+                cis_request.directive,
+                cis_request.reason,
+                cis_request.incident_id or invocation_id,
+                wa_key_id,
+                actor,
+                signature_hex,
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to record invocation (table may not exist yet): {e}")
+
+    # Deliver via agent events channel
+    delivered = False
+    try:
+        event_payload = json.dumps({
+            "event_type": "covenant_invocation",
+            "invocation_id": invocation_id,
+            "payload": payload_dict,
+            "signature": signature_hex,
+            "signing_key_id": wa_key_id,
+        })
+        db.execute(
+            """INSERT INTO agent_events (id, agent_uid, event_type, payload, created_at)
+               VALUES (?, ?, 'covenant_invocation', ?, ?)""",
+            (
+                uuid.uuid4().hex,
+                cis_request.target_agent_id,
+                event_payload,
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        db.commit()
+        delivered = True
+
+        # Mark as delivered
+        db.execute(
+            "UPDATE covenant_invocations SET delivered = 1, delivered_at = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), invocation_id),
+        )
+        db.commit()
+    except Exception as e:
+        logger.error(f"Failed to deliver covenant invocation: {e}")
+
+    # Audit log
+    write_audit_log(
+        db,
+        actor=actor,
+        event_type="covenant_invocation",
+        payload={"invocation_id": invocation_id},
+        details={
+            "target_agent_id": cis_request.target_agent_id,
+            "directive": cis_request.directive,
+            "reason": cis_request.reason,
+            "delivered": delivered,
+        },
+    )
+
+    logger.info(
+        f"Covenant invocation issued: id={invocation_id} "
+        f"target={cis_request.target_agent_id} directive={cis_request.directive} "
+        f"delivered={delivered}"
+    )
+
+    return {
+        "status": "delivered" if delivered else "queued",
+        "invocation_id": invocation_id,
+        "target_agent_id": cis_request.target_agent_id,
+        "directive": cis_request.directive,
+    }

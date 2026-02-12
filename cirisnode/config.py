@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # --- Portal API (billing/gating delegation) ---
     PORTAL_API_URL: str = "https://api.portal.ethicsengine.org"  # Portal API for standing checks
 
+    # --- Persistent WA Certificate (CIRISVerify Enforcement) ---
+    CIRISNODE_WA_PRIVATE_KEY: str = ""     # Base64 Ed25519 32-byte private key
+    CIRISNODE_WA_KEY_ID: str = ""          # Key ID from Portal (matches registry)
+    CIRISNODE_WA_PUBLIC_KEY: str = ""      # Base64 Ed25519 public key (derived if empty)
+
     # --- A2A Protocol Settings ---
     A2A_ENABLED: bool = True  # Enable A2A protocol endpoints
     MCP_ENABLED: bool = True  # Enable MCP server endpoints
