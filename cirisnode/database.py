@@ -34,6 +34,20 @@ def _ensure_sqlite_schema(conn: sqlite3.Connection) -> None:
                 UNIQUE(user_id)
             )
         """)
+        # covenant_traces table for agent trace events (Lens format)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS covenant_traces (
+                id TEXT PRIMARY KEY,
+                agent_uid TEXT,
+                trace_id TEXT,
+                thought_id TEXT,
+                task_id TEXT,
+                trace_level TEXT,
+                trace_json TEXT,
+                content_hash TEXT,
+                received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         # wbd_tasks new columns (ALTER TABLE doesn't support IF NOT EXISTS in SQLite)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(wbd_tasks)").fetchall()}
         for col, typedef in [

@@ -16,6 +16,7 @@ from cirisnode.api.config.routes import config_router
 from cirisnode.api.a2a.routes import a2a_router, agent_card_router
 from cirisnode.api.scores.routes import scores_router
 from cirisnode.api.evaluations.routes import evaluations_router, usage_router
+from cirisnode.api.covenant.routes import covenant_router
 from cirisnode.api.agentbeats.routes import agentbeats_router
 from cirisnode.api.agentbeats.profiles import profiles_router
 from cirisnode.api.billing.routes import billing_router
@@ -101,6 +102,7 @@ app.include_router(wbd_router)
 app.include_router(llm_router)
 app.include_router(health_router)
 app.include_router(agent_router)
+app.include_router(covenant_router)
 app.include_router(auth_router)
 app.include_router(benchmarks_router)
 app.include_router(wa_router)
