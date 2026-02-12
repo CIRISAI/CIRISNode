@@ -45,9 +45,30 @@ def _ensure_sqlite_schema(conn: sqlite3.Connection) -> None:
                 trace_level TEXT,
                 trace_json TEXT,
                 content_hash TEXT,
+                signature_verified INTEGER DEFAULT 0,
+                signing_key_id TEXT,
                 received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # covenant_public_keys table for agent Ed25519 key registration
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS covenant_public_keys (
+                key_id TEXT PRIMARY KEY,
+                public_key_base64 TEXT NOT NULL,
+                algorithm TEXT DEFAULT 'ed25519',
+                description TEXT DEFAULT '',
+                registered_by TEXT,
+                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Migrate existing covenant_traces if missing new columns
+        ct_cols = {row[1] for row in conn.execute("PRAGMA table_info(covenant_traces)").fetchall()}
+        for col, typedef in [
+            ("signature_verified", "INTEGER DEFAULT 0"),
+            ("signing_key_id", "TEXT"),
+        ]:
+            if col not in ct_cols:
+                conn.execute(f"ALTER TABLE covenant_traces ADD COLUMN {col} {typedef}")
         # wbd_tasks new columns (ALTER TABLE doesn't support IF NOT EXISTS in SQLite)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(wbd_tasks)").fetchall()}
         for col, typedef in [
