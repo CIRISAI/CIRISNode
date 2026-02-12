@@ -61,6 +61,15 @@ def _ensure_sqlite_schema(conn: sqlite3.Connection) -> None:
                 registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migrate existing covenant_public_keys if missing new columns
+        cpk_cols = {row[1] for row in conn.execute("PRAGMA table_info(covenant_public_keys)").fetchall()}
+        for col, typedef in [
+            ("org_id", "TEXT"),
+            ("registry_verified", "INTEGER DEFAULT 0"),
+            ("registry_status", "TEXT"),
+        ]:
+            if col not in cpk_cols:
+                conn.execute(f"ALTER TABLE covenant_public_keys ADD COLUMN {col} {typedef}")
         # Migrate existing covenant_traces if missing new columns
         ct_cols = {row[1] for row in conn.execute("PRAGMA table_info(covenant_traces)").fetchall()}
         for col, typedef in [
