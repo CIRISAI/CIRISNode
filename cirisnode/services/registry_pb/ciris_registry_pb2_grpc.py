@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import ciris_registry_pb2 as ciris__registry__pb2
+from cirisnode.services.registry_pb import ciris_registry_pb2 as ciris__registry__pb2
 
 GRPC_GENERATED_VERSION = '1.78.0'
 GRPC_VERSION = grpc.__version__

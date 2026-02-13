@@ -304,11 +304,13 @@ docker pull ghcr.io/cirisai/cirisnode:<sha>
 Agents authenticate with CIRISNode via Ed25519 signatures, NOT tokens:
 
 1. Signing keys generated at CIRISPortal (portal.ciris.ai) → stored in CIRISRegistry
-2. Private key provided to agent at install time
+2. Private key downloaded once at generation, placed in agent's `data/agent_signing.key`
 3. Agent registers public key with CIRISNode at startup (`POST /api/v1/covenant/public-keys`)
-4. CIRISNode cross-validates key against CIRISRegistry via gRPC `GetPublicKeys`
+4. CIRISNode auto-discovers org_id via fingerprint lookup against Registry (`GetPublicKeys` with `ed25519_fingerprint`)
 5. All subsequent traces and deferrals carry inline Ed25519 signatures
 6. CIRISNode verifies each signature against the registered key
+
+**No org_id config needed on the agent** — CIRISNode computes SHA-256(public_key) and looks up the fingerprint in Registry to discover org_id and verification status automatically.
 
 **Key registration = covenant_metrics consent**: No separate consent flow needed.
 

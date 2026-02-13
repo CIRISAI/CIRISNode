@@ -73,19 +73,45 @@ def _require_agent_token(
 def _verify_registry_key(org_id: str, key_id: str, public_key_base64: str) -> tuple:
     """Cross-validate a public key against CIRISRegistry.
 
-    Returns (registry_verified: bool, registry_status: str).
+    If org_id is provided, verifies directly. Otherwise, auto-discovers
+    by computing the Ed25519 fingerprint and looking up in Registry.
+
+    Returns (registry_verified: bool, registry_status: str, discovered_org_id: str).
     """
-    if not org_id:
-        return False, "no org_id provided"
+    import hashlib
 
     try:
         from cirisnode.services.registry_client import get_registry_client
         client = get_registry_client()
-        matches, reason = client.verify_key_matches(org_id, key_id, public_key_base64)
-        return matches, reason
+
+        if org_id:
+            # Direct verification with known org_id
+            matches, reason = client.verify_key_matches(org_id, key_id, public_key_base64)
+            return matches, reason, org_id
+
+        # Auto-discover: compute fingerprint from public key and look up in Registry
+        pubkey_bytes = base64.b64decode(public_key_base64)
+        fingerprint = hashlib.sha256(pubkey_bytes).hexdigest()
+        found, discovered_org_id, registry_pubkey, status = client.get_key_by_fingerprint(fingerprint)
+
+        if not found:
+            return False, "key fingerprint not found in registry", ""
+
+        if status in ("KEY_REVOKED",):
+            return False, f"key revoked in registry (status={status})", discovered_org_id or ""
+
+        if status in ("KEY_PENDING",):
+            return False, f"key not yet active in registry (status={status})", discovered_org_id or ""
+
+        # Compare the public key bytes
+        if registry_pubkey == pubkey_bytes:
+            return True, f"verified via fingerprint (status={status})", discovered_org_id or ""
+        else:
+            return False, "public key mismatch — fingerprint matched but key bytes differ", discovered_org_id or ""
+
     except Exception as e:
         logger.warning(f"Registry validation failed for key_id={key_id}: {e}")
-        return False, f"registry unavailable: {e}"
+        return False, f"registry unavailable: {e}", org_id or ""
 
 
 def _verify_trace_signature(trace: Dict[str, Any], conn) -> Optional[str]:
@@ -202,17 +228,16 @@ async def register_public_key(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid Ed25519 public key: {e}")
 
-    # Cross-validate against CIRISRegistry (portal.ciris.ai → Registry)
-    registry_verified = False
-    registry_status = "not checked"
-    if request.org_id:
-        registry_verified, registry_status = _verify_registry_key(
-            request.org_id, request.key_id, request.public_key_base64
-        )
-        logger.info(
-            f"Registry validation for key_id={request.key_id} org_id={request.org_id}: "
-            f"verified={registry_verified} reason={registry_status}"
-        )
+    # Cross-validate against CIRISRegistry (auto-discovers org_id via fingerprint)
+    registry_verified, registry_status, discovered_org_id = _verify_registry_key(
+        request.org_id, request.key_id, request.public_key_base64
+    )
+    # Use discovered org_id if agent didn't provide one
+    effective_org_id = request.org_id or discovered_org_id or ""
+    logger.info(
+        f"Registry validation for key_id={request.key_id} org_id={effective_org_id}: "
+        f"verified={registry_verified} reason={registry_status}"
+    )
 
     registered_by = actor or f"self-register:{request.key_id[:16]}"
 
@@ -229,7 +254,7 @@ async def register_public_key(
             request.algorithm,
             request.description,
             registered_by,
-            request.org_id or None,
+            effective_org_id or None,
             1 if registry_verified else 0,
             registry_status,
             datetime.datetime.utcnow(),
@@ -239,11 +264,12 @@ async def register_public_key(
 
     logger.info(
         f"Public key registered: key_id={request.key_id} by={registered_by} "
-        f"registry_verified={registry_verified}"
+        f"org_id={effective_org_id} registry_verified={registry_verified}"
     )
     return {
         "status": "registered",
         "key_id": request.key_id,
+        "org_id": effective_org_id,
         "registry_verified": registry_verified,
         "registry_status": registry_status,
     }

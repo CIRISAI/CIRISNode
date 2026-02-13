@@ -98,6 +98,38 @@ class RegistryClient:
             logger.warning(f"Registry GetPublicKeys error: {e}")
             return False, None, None
 
+    def get_key_by_fingerprint(
+        self, ed25519_fingerprint: str
+    ) -> Tuple[bool, Optional[str], Optional[bytes], Optional[str]]:
+        """Look up a key by its Ed25519 fingerprint (SHA-256 hex of public key).
+
+        Args:
+            ed25519_fingerprint: SHA-256 hex digest of the Ed25519 public key.
+
+        Returns:
+            (found, org_id, ed25519_pubkey_bytes, key_status_name)
+        """
+        try:
+            stub = self._ensure_channel()
+            request = ciris_registry_pb2.GetPublicKeysRequest(
+                ed25519_fingerprint=ed25519_fingerprint,
+            )
+            response = stub.GetPublicKeys(request, timeout=10)
+
+            if not response.found:
+                return False, None, None, None
+
+            ed25519_bytes = response.public_keys.ed25519_public_key
+            status_name = ciris_registry_pb2.KeyStatus.Name(response.status)
+            return True, response.org_id, ed25519_bytes, status_name
+
+        except grpc.RpcError as e:
+            logger.warning(f"Registry fingerprint lookup failed: {e.code()} {e.details()}")
+            return False, None, None, None
+        except Exception as e:
+            logger.warning(f"Registry fingerprint lookup error: {e}")
+            return False, None, None, None
+
     def verify_key_matches(
         self, org_id: str, key_id: str, claimed_pubkey_b64: str
     ) -> Tuple[bool, str]:
