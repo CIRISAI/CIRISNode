@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # --- Portal API (billing/gating delegation) ---
     PORTAL_API_URL: str = "https://api.portal.ethicsengine.org"  # Portal API for standing checks
 
+    # --- CIRISRegistry (authenticated agent lookup) ---
+    REGISTRY_JWT_SECRET: str = ""  # Shared secret with CIRISRegistry for service JWT auth
+
     # --- Persistent WA Certificate (CIRISVerify Enforcement) ---
     CIRISNODE_WA_PRIVATE_KEY: str = ""     # Base64 Ed25519 32-byte private key
     CIRISNODE_WA_KEY_ID: str = ""          # Key ID from Portal (matches registry)
