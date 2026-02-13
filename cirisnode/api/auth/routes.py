@@ -5,10 +5,11 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 import jwt
 from cirisnode.utils.rbac import require_role
+from cirisnode.config import settings
 import hashlib
 import json
 
-SECRET_KEY = "testsecret"
+SECRET_KEY = getattr(settings, "JWT_SECRET", None) or "testsecret"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 ALLOWED_ADMIN_DOMAIN = "ciris.ai"
