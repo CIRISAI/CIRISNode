@@ -317,10 +317,26 @@ Agents authenticate with CIRISNode via Ed25519 signatures, NOT tokens:
 | Method | Endpoint | Auth | Purpose |
 |--------|----------|------|---------|
 | POST | `/api/v1/covenant/public-keys` | X-Agent-Token (optional) | Register agent signing key |
+| PATCH | `/api/v1/covenant/public-keys/{key_id}` | Admin JWT | Admin: update org_id, registry_verified, registry_status |
 | POST | `/api/v1/covenant/events` | Ed25519 inline signature | Batch covenant traces |
 | POST | `/api/v1/wbd/submit` | Ed25519 signature | Submit signed deferral |
 | GET | `/api/v1/wbd/tasks/{id}` | None | Poll deferral resolution |
 | POST | `/api/v1/agent/events` | X-Agent-Token | Post agent events |
+
+### Admin Key Management
+
+The `PATCH /api/v1/covenant/public-keys/{key_id}` endpoint allows admins to override key verification status. Useful for QA and when the automatic Registry cross-validation path is not yet complete.
+
+**Request body** (all fields optional):
+```json
+{
+  "org_id": "73bddb21-...",
+  "registry_verified": true,
+  "registry_status": "active"
+}
+```
+
+**Note**: `registry_verified` must be `true` for an agent's Ed25519 signatures to be accepted on WBD submissions.
 
 ### Admin UI
 
