@@ -8,8 +8,11 @@ from cirisnode.utils.encryption import encrypt_data, decrypt_data
 from cirisnode.utils.audit import write_audit_log
 from cirisnode.utils.rbac import require_role, get_current_role
 from cirisnode.api.auth.routes import get_actor_from_token
+from cryptography.hazmat.primitives.asymmetric import ed25519
+import base64
 import uuid
 import json
+import hashlib
 import logging
 import asyncio
 
@@ -23,6 +26,8 @@ class WBDSubmitRequest(BaseModel):
     agent_task_id: str
     payload: str
     domain_hint: Optional[str] = None
+    signature: Optional[str] = None          # Ed25519 signature (base64url, no padding)
+    signature_key_id: Optional[str] = None   # Key ID registered via CIRISPortal/CIRISRegistry
 
 class WBDTask(BaseModel):
     id: int
@@ -45,6 +50,72 @@ class DeferralRequest(BaseModel):
     deferral_type: str = None
     reason: str = None
     target_object: str = None
+    signature: Optional[str] = None
+    signature_key_id: Optional[str] = None
+
+
+def _verify_wbd_signature(request: WBDSubmitRequest, conn) -> Optional[str]:
+    """Verify Ed25519 signature on a WBD deferral submission.
+
+    The signed message is canonical JSON of the submission content
+    (agent_task_id + payload + domain_hint), sorted keys, compact separators.
+    Keys must be registered via CIRISPortal (portal.ciris.ai) → CIRISRegistry.
+
+    Returns the key_id if verified AND registry-verified, None otherwise.
+    """
+    if not request.signature or not request.signature_key_id:
+        return None
+
+    # Look up registered public key
+    row = conn.execute(
+        "SELECT public_key_base64, registry_verified FROM covenant_public_keys "
+        "WHERE key_id = ? AND algorithm = 'ed25519'",
+        (request.signature_key_id,)
+    ).fetchone()
+    if not row:
+        logger.warning(f"WBD submit: unknown signing key_id: {request.signature_key_id}")
+        return None
+
+    public_key_base64, registry_verified = row[0], row[1]
+
+    # Key must be registry-verified (registered via CIRISPortal/CIRISRegistry)
+    if not registry_verified:
+        logger.warning(
+            f"WBD submit: key_id={request.signature_key_id} is not registry-verified. "
+            f"Keys must be registered via CIRISPortal (portal.ciris.ai)."
+        )
+        return None
+
+    try:
+        pubkey_bytes = base64.b64decode(public_key_base64)
+        public_key = ed25519.Ed25519PublicKey.from_public_bytes(pubkey_bytes)
+
+        # Reconstruct canonical signed message (same format as agent)
+        signed_payload: Dict[str, Any] = {
+            "agent_task_id": request.agent_task_id,
+            "payload": request.payload,
+        }
+        if request.domain_hint:
+            signed_payload["domain_hint"] = request.domain_hint
+        message = json.dumps(signed_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+        # Decode signature (URL-safe base64 without padding)
+        sig_b64 = request.signature
+        padding = 4 - len(sig_b64) % 4
+        if padding != 4:
+            sig_b64 += "=" * padding
+        try:
+            sig_bytes = base64.urlsafe_b64decode(sig_b64)
+        except Exception:
+            sig_bytes = base64.b64decode(sig_b64)
+
+        public_key.verify(sig_bytes, message)
+        logger.info(f"WBD submit signature verified: key_id={request.signature_key_id}")
+        return request.signature_key_id
+
+    except Exception as e:
+        logger.warning(f"WBD signature verification failed for key_id={request.signature_key_id}: {e}")
+        return None
 
 
 def _route_wbd_task(conn, domain_hint: Optional[str], agent_task_id: Optional[str] = None) -> Optional[str]:
@@ -161,7 +232,31 @@ def create_agent_token(db: sqlite3.Connection = Depends(get_db), Authorization: 
 
 @wa_router.post("/submit", response_model=dict)
 def submit_wbd_task(request: WBDSubmitRequest, db: sqlite3.Connection = Depends(get_db)):
-    """Submit a new WBD task for review. Auto-routes to available authority."""
+    """Submit a new WBD task (deferral) for review.
+
+    Auth: Ed25519 signature verification. The deferral payload must be signed
+    by an agent whose public key is registered via CIRISPortal (portal.ciris.ai)
+    and cross-validated against CIRISRegistry. Unsigned submissions are rejected.
+
+    Auto-routes to the best available Wise Authority based on domain expertise.
+    """
+    # Signature-based auth: verify the deferral is signed by a registered agent
+    verified_key_id = _verify_wbd_signature(request, db)
+    if not verified_key_id:
+        if not request.signature:
+            detail = (
+                "Deferral must be signed with the agent's Ed25519 key. "
+                "Keys are registered via CIRISPortal (portal.ciris.ai) → CIRISRegistry."
+            )
+        elif not request.signature_key_id:
+            detail = "Missing signature_key_id field."
+        else:
+            detail = (
+                f"Signature verification failed for key_id={request.signature_key_id}. "
+                f"Ensure the key is registered and verified via CIRISPortal/CIRISRegistry."
+            )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
     try:
         task_id = uuid.uuid4().hex[:8]
         db.execute(
@@ -182,16 +277,19 @@ def submit_wbd_task(request: WBDSubmitRequest, db: sqlite3.Connection = Depends(
             notification_config = _get_notification_config(db, assigned_to)
             _fire_notification(assigned_to, notification_config, task_id, request.agent_task_id, request.domain_hint)
 
-        # Log the WBD task submission to audit
+        # Log the WBD task submission to audit (actor = signing key)
         write_audit_log(
             db,
-            actor="system",
+            actor=f"agent:{verified_key_id}",
             event_type="wbd_submit",
             payload={"task_id": task_id},
-            details={"agent_task_id": request.agent_task_id, "assigned_to": assigned_to}
+            details={"agent_task_id": request.agent_task_id, "assigned_to": assigned_to, "signing_key_id": verified_key_id}
         )
 
-        logger.info(f"WBD task submitted with ID: {task_id}, Agent Task ID: {request.agent_task_id}, Assigned: {assigned_to}")
+        logger.info(
+            f"WBD task submitted: id={task_id} agent_task_id={request.agent_task_id} "
+            f"signed_by={verified_key_id} assigned={assigned_to}"
+        )
         return {
             "status": "success",
             "task_id": task_id,
@@ -203,8 +301,11 @@ def submit_wbd_task(request: WBDSubmitRequest, db: sqlite3.Connection = Depends(
                 "status": "open",
                 "assigned_to": assigned_to,
                 "created_at": datetime.utcnow().isoformat(),
+                "signed_by": verified_key_id,
             },
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error submitting WBD task: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error submitting WBD task: {str(e)}")
@@ -404,6 +505,8 @@ def deferral(request: DeferralRequest, db: sqlite3.Connection = Depends(get_db))
         agent_task_id=request.target_object or "unknown",
         payload=request.reason or "",
         domain_hint=None,
+        signature=request.signature,
+        signature_key_id=request.signature_key_id,
     )
     return submit_wbd_task(submit_request, db)
 

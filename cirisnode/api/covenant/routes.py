@@ -1,8 +1,12 @@
 """
 Covenant trace ingestion endpoints with Ed25519 signature verification.
 
-Auth model: agent signs payloads with its Ed25519 key, CIRISNode verifies
-against registered public keys AND cross-validates against CIRISRegistry.
+Auth model: agents sign payloads with their Ed25519 key. CIRISNode verifies
+signatures against public keys registered via CIRISPortal (portal.ciris.ai)
+and cross-validated against CIRISRegistry. Only data from agents with
+registry-verified keys is accepted.
+
+Key source of truth: CIRISPortal → CIRISRegistry (portal.ciris.ai)
 """
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -149,15 +153,31 @@ def _is_key_registry_verified(key_id: str, conn) -> bool:
 # Public Key Registration (with registry cross-validation)
 # =========================================================================
 
+def _optional_agent_token(
+    x_agent_token: Optional[str] = Header(None, alias="x-agent-token"),
+    db=Depends(get_db),
+) -> Optional[str]:
+    """Optionally validate agent token. Returns token or None."""
+    if not x_agent_token:
+        return None
+    conn = _get_conn(db)
+    token_row = conn.execute(
+        "SELECT token FROM agent_tokens WHERE token = ?", (x_agent_token,)
+    ).fetchone()
+    return x_agent_token if token_row else None
+
+
 @covenant_router.post("/public-keys")
 async def register_public_key(
     request: PublicKeyRegistration,
     db=Depends(get_db),
-    actor: str = Depends(_require_agent_token),
+    actor: Optional[str] = Depends(_optional_agent_token),
 ):
     """
     Register an agent's Ed25519 public key for signature verification.
-    Cross-validates against CIRISRegistry if org_id is provided.
+
+    Auth: Agent token (optional) OR registry cross-validation via org_id.
+    Keys are cross-validated against CIRISRegistry (source of truth: CIRISPortal).
     Idempotent — returns 200 if key already registered.
     """
     conn = _get_conn(db)
@@ -181,7 +201,7 @@ async def register_public_key(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid Ed25519 public key: {e}")
 
-    # Cross-validate against CIRISRegistry
+    # Cross-validate against CIRISRegistry (portal.ciris.ai → Registry)
     registry_verified = False
     registry_status = "not checked"
     if request.org_id:
@@ -192,6 +212,8 @@ async def register_public_key(
             f"Registry validation for key_id={request.key_id} org_id={request.org_id}: "
             f"verified={registry_verified} reason={registry_status}"
         )
+
+    registered_by = actor or f"self-register:{request.key_id[:16]}"
 
     conn.execute(
         """
@@ -205,7 +227,7 @@ async def register_public_key(
             request.public_key_base64,
             request.algorithm,
             request.description,
-            actor,
+            registered_by,
             request.org_id or None,
             1 if registry_verified else 0,
             registry_status,
@@ -215,7 +237,7 @@ async def register_public_key(
     conn.commit()
 
     logger.info(
-        f"Public key registered: key_id={request.key_id} by={actor} "
+        f"Public key registered: key_id={request.key_id} by={registered_by} "
         f"registry_verified={registry_verified}"
     )
     return {
@@ -297,15 +319,21 @@ async def reverify_public_key(
 async def receive_covenant_events(
     request: CovenantBatchRequest,
     db=Depends(get_db),
-    actor: str = Depends(_require_agent_token),
 ):
     """
     Receive covenant trace events from agents in Lens batch format.
-    Verifies Ed25519 signatures on traces against registered public keys.
-    Events are write-once (immutable after creation).
+
+    Auth: Ed25519 signature verification — traces must be signed by an agent
+    whose public key is registered in CIRISPortal (portal.ciris.ai) and
+    cross-validated against CIRISRegistry. At least one trace in the batch
+    must carry a valid signature from a registry-verified key.
+
+    No header-based auth required. The signature IS the auth.
     """
     conn = _get_conn(db)
-    received = 0
+
+    # First pass: verify all signatures and check registry status
+    event_rows = []
     verified_count = 0
     registry_verified_count = 0
 
@@ -315,20 +343,54 @@ async def receive_covenant_events(
         event_json = json.dumps(event, sort_keys=True)
         content_hash = hashlib.sha256(event_json.encode("utf-8")).hexdigest()
 
-        # Verify signature if present
         verified_key_id = _verify_trace_signature(trace, conn)
         signature_verified = verified_key_id is not None
+        is_registry_verified = False
         if signature_verified:
             verified_count += 1
-            # Check if the signing key is also registry-verified
             if _is_key_registry_verified(verified_key_id, conn):
                 registry_verified_count += 1
+                is_registry_verified = True
 
-        agent_uid = trace.get("agent_id_hash", event.get("agent_uid", ""))
-        trace_id = trace.get("trace_id", "")
-        thought_id = trace.get("thought_id", "")
-        task_id = trace.get("task_id", "")
+        event_rows.append((
+            event_id,
+            trace.get("agent_id_hash", event.get("agent_uid", "")),
+            trace.get("trace_id", ""),
+            trace.get("thought_id", ""),
+            trace.get("task_id", ""),
+            request.trace_level,
+            event_json,
+            content_hash,
+            1 if signature_verified else 0,
+            verified_key_id,
+            datetime.datetime.utcnow(),
+        ))
 
+    # Auth gate: at least one trace must be signed by a key registered
+    # in CIRISPortal/CIRISRegistry. This is the signature-based auth model.
+    if registry_verified_count == 0:
+        # Provide helpful detail depending on what we found
+        if verified_count > 0:
+            detail = (
+                f"Traces are signed ({verified_count} verified) but the signing key "
+                f"is not registry-verified. Keys must be registered via "
+                f"CIRISPortal (portal.ciris.ai) and validated against CIRISRegistry."
+            )
+        elif any(event.get("trace", {}).get("signature") for event in request.events):
+            detail = (
+                "Trace signatures present but verification failed. "
+                "Ensure the signing key is registered with CIRISNode and "
+                "cross-validated via CIRISPortal (portal.ciris.ai)."
+            )
+        else:
+            detail = (
+                "No signatures found on traces. Agents must sign traces with "
+                "their Ed25519 key (registered via CIRISPortal/CIRISRegistry)."
+            )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+    # Insert all verified events
+    for row in event_rows:
         conn.execute(
             """
             INSERT INTO covenant_traces
@@ -336,26 +398,13 @@ async def receive_covenant_events(
                  trace_json, content_hash, signature_verified, signing_key_id, received_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                event_id,
-                agent_uid,
-                trace_id,
-                thought_id,
-                task_id,
-                request.trace_level,
-                event_json,
-                content_hash,
-                1 if signature_verified else 0,
-                verified_key_id,
-                datetime.datetime.utcnow(),
-            ),
+            row,
         )
-        received += 1
 
     conn.commit()
     return {
         "status": "ok",
-        "events_received": received,
+        "events_received": len(event_rows),
         "events_verified": verified_count,
         "events_registry_verified": registry_verified_count,
     }

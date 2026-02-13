@@ -1,7 +1,10 @@
-"""WBD router at /api/v1/wbd — delegates to the wa_router's SQLite-backed implementation.
+"""WBD router at /api/v1/wbd — delegates to the wa_router's implementation.
 
-The frontend uses /api/v1/wbd/tasks while the agent-facing API uses /api/v1/wa/submit.
-This router provides the /wbd paths that forward to the same database and routing logic.
+The frontend uses /api/v1/wbd/tasks while the agent-facing API uses /api/v1/wbd/submit.
+Both /wbd/submit and /wa/submit share the same signature-based auth logic.
+
+Auth model: agents sign deferrals with their Ed25519 key. Keys are registered
+via CIRISPortal (portal.ciris.ai) → CIRISRegistry. Unsigned submissions rejected.
 """
 from fastapi import APIRouter, HTTPException, status, Depends, Header
 from pydantic import BaseModel
@@ -21,6 +24,7 @@ from cirisnode.api.wa.routes import (
     _route_wbd_task,
     _get_notification_config,
     _fire_notification,
+    submit_wbd_task as _wa_submit_wbd_task,
 )
 import logging
 
@@ -31,46 +35,8 @@ wbd_router = APIRouter(prefix="/api/v1/wbd", tags=["wbd"])
 
 @wbd_router.post("/submit", response_model=dict)
 def submit_wbd_task(request: WBDSubmitRequest, db: sqlite3.Connection = Depends(get_db)):
-    """Submit a new WBD task (alias for /api/v1/wa/submit)."""
-    import uuid
-    try:
-        task_id = str(uuid.uuid4())[:8]
-        db.execute(
-            "INSERT INTO wbd_tasks (id, agent_task_id, payload, status, created_at, domain_hint) VALUES (?, ?, ?, 'open', ?, ?)",
-            (task_id, request.agent_task_id, encrypt_data(request.payload), datetime.utcnow().isoformat(), request.domain_hint),
-        )
-        db.commit()
-
-        assigned_to = _route_wbd_task(db, request.domain_hint, request.agent_task_id)
-        if assigned_to:
-            db.execute(
-                "UPDATE wbd_tasks SET assigned_to = ?, notified_at = ? WHERE id = ?",
-                (assigned_to, datetime.utcnow().isoformat(), task_id),
-            )
-            db.commit()
-            notification_config = _get_notification_config(db, assigned_to)
-            _fire_notification(assigned_to, notification_config, task_id, request.agent_task_id, request.domain_hint)
-
-        write_audit_log(db, actor="system", event_type="wbd_submit",
-                        payload={"task_id": task_id},
-                        details={"agent_task_id": request.agent_task_id, "assigned_to": assigned_to})
-
-        return {
-            "status": "success",
-            "task_id": task_id,
-            "assigned_to": assigned_to,
-            "message": "WBD task submitted successfully",
-            "details": {
-                "agent_task_id": request.agent_task_id,
-                "payload": request.payload,
-                "status": "open",
-                "assigned_to": assigned_to,
-                "created_at": datetime.utcnow().isoformat(),
-            },
-        }
-    except Exception as e:
-        logger.error(f"Error submitting WBD task: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Submit a new WBD task. Delegates to wa_router's signature-verified implementation."""
+    return _wa_submit_wbd_task(request, db)
 
 
 @wbd_router.get("/tasks")
