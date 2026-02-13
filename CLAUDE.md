@@ -297,6 +297,43 @@ To rollback, push a revert commit to `main` or manually pull a specific SHA tag 
 docker pull ghcr.io/cirisai/cirisnode:<sha>
 ```
 
+## Agent-Registry Integration (E2E QA 2026-02-13)
+
+### How Agents Authenticate
+
+Agents authenticate with CIRISNode via Ed25519 signatures, NOT tokens:
+
+1. Signing keys generated at CIRISPortal (portal.ciris.ai) → stored in CIRISRegistry
+2. Private key provided to agent at install time
+3. Agent registers public key with CIRISNode at startup (`POST /api/v1/covenant/public-keys`)
+4. CIRISNode cross-validates key against CIRISRegistry via gRPC `GetPublicKeys`
+5. All subsequent traces and deferrals carry inline Ed25519 signatures
+6. CIRISNode verifies each signature against the registered key
+
+**Key registration = covenant_metrics consent**: No separate consent flow needed.
+
+### Agent Event Endpoints
+
+| Method | Endpoint | Auth | Purpose |
+|--------|----------|------|---------|
+| POST | `/api/v1/covenant/public-keys` | X-Agent-Token (optional) | Register agent signing key |
+| POST | `/api/v1/covenant/events` | Ed25519 inline signature | Batch covenant traces |
+| POST | `/api/v1/wbd/submit` | Ed25519 signature | Submit signed deferral |
+| GET | `/api/v1/wbd/tasks/{id}` | None | Poll deferral resolution |
+| POST | `/api/v1/agent/events` | X-Agent-Token | Post agent events |
+
+### Admin UI
+
+The CIRISNode admin UI is at **admin.ethicsengine.org** (NOT node.ciris.ai/docs). Use it for:
+- WBD task resolution (Agent Oversight page)
+- User/authority management
+- Audit log viewing
+- System status
+
+### Trace Levels
+
+CIRISNode receives **full_traces** (via cirisnode adapter). CIRISLens receives **detailed** traces (via covenant_metrics adapter). These are separate concerns.
+
 ## Architecture
 
 ```
