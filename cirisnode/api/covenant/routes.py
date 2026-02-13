@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 from cirisnode.database import get_db
+from cirisnode.utils.rbac import require_role
 from cryptography.hazmat.primitives.asymmetric import ed25519
 import base64
 import uuid
@@ -309,6 +310,56 @@ async def reverify_public_key(
         "registry_verified": registry_verified,
         "registry_status": registry_status,
     }
+
+
+class AdminKeyUpdate(BaseModel):
+    org_id: Optional[str] = None
+    registry_verified: Optional[bool] = None
+    registry_status: Optional[str] = None
+
+
+@covenant_router.patch(
+    "/public-keys/{key_id}",
+    dependencies=[Depends(require_role(["admin"]))],
+)
+async def admin_update_public_key(
+    key_id: str,
+    request: AdminKeyUpdate,
+    db=Depends(get_db),
+):
+    """Admin: update org_id, registry_verified, or registry_status on a covenant key."""
+    conn = _get_conn(db)
+
+    row = conn.execute(
+        "SELECT key_id FROM covenant_public_keys WHERE key_id = ?", (key_id,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    updates = []
+    params = []
+    if request.org_id is not None:
+        updates.append("org_id = ?")
+        params.append(request.org_id)
+    if request.registry_verified is not None:
+        updates.append("registry_verified = ?")
+        params.append(1 if request.registry_verified else 0)
+    if request.registry_status is not None:
+        updates.append("registry_status = ?")
+        params.append(request.registry_status)
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    params.append(key_id)
+    conn.execute(
+        f"UPDATE covenant_public_keys SET {', '.join(updates)} WHERE key_id = ?",
+        params,
+    )
+    conn.commit()
+
+    logger.info(f"Admin updated key {key_id}: {dict(request)}")
+    return {"status": "updated", "key_id": key_id, "updates": dict(request)}
 
 
 # =========================================================================
