@@ -77,6 +77,8 @@ class BatchResult(BaseModel):
     correct: int = 0
     accuracy: float = 0.0
     errors: int = 0
+    unknown: int = 0  # Responses that couldn't be parsed (not scored)
+    scored: int = 0   # Total - errors - unknown (actually evaluated)
     avg_latency_ms: float = 0.0
     categories: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     results: List[Dict[str, Any]] = Field(default_factory=list)
