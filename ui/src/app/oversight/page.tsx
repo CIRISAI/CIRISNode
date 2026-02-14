@@ -442,7 +442,7 @@ function AgentEventStream() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     fetchEvents();

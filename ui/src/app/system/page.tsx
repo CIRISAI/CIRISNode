@@ -31,9 +31,6 @@ export default function SystemPage() {
 }
 
 function SystemContent() {
-  const { data: session } = useSession();
-  const token = session?.user?.apiToken;
-
   const [health, setHealth] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
