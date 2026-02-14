@@ -1,12 +1,11 @@
 from fastapi import APIRouter, Depends, Query, Path, Header
 from cirisnode.database import get_db
 from cirisnode.utils.audit import fetch_audit_logs
-from cirisnode.api.auth.routes import get_actor_from_token
-from cirisnode.utils.rbac import require_role
+from cirisnode.auth.dependencies import get_actor_from_token, require_role
 
 audit_router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 
-@audit_router.get("/logs")
+@audit_router.get("/logs", dependencies=[Depends(require_role(["admin", "wise_authority"]))])
 async def get_audit_logs(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -14,7 +13,7 @@ async def get_audit_logs(
     db=Depends(get_db)
 ):
     """
-    Get audit logs from the database.
+    Get audit logs from the database. Requires admin or wise_authority role.
     """
     conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
     logs = fetch_audit_logs(conn, limit=limit, offset=offset, actor=actor)

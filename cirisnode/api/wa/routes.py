@@ -6,8 +6,7 @@ from cirisnode.database import get_db
 import sqlite3
 from cirisnode.utils.encryption import encrypt_data, decrypt_data
 from cirisnode.utils.audit import write_audit_log
-from cirisnode.utils.rbac import require_role, get_current_role
-from cirisnode.api.auth.routes import get_actor_from_token
+from cirisnode.auth.dependencies import require_role, get_current_role, get_actor_from_token
 from cryptography.hazmat.primitives.asymmetric import ed25519
 import base64
 import uuid
@@ -419,9 +418,18 @@ def get_wbd_task(task_id: str, db: sqlite3.Connection = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error retrieving WBD task: {str(e)}")
 
 
-@wa_router.post("/tasks/{task_id}/resolve", response_model=dict)
-def resolve_wbd_task(task_id: str, request: WBDResolveRequest, db: sqlite3.Connection = Depends(get_db)):
-    """Resolve a WBD task with a decision (approve or reject)."""
+@wa_router.post(
+    "/tasks/{task_id}/resolve",
+    dependencies=[Depends(require_role(["admin", "wise_authority"]))],
+    response_model=dict,
+)
+def resolve_wbd_task(
+    task_id: str,
+    request: WBDResolveRequest,
+    Authorization: str = Header(...),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Resolve a WBD task with a decision (approve or reject). Requires admin or wise_authority role."""
     try:
         if request.decision not in ["approve", "reject"]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Decision must be 'approve' or 'reject'")
@@ -430,6 +438,9 @@ def resolve_wbd_task(task_id: str, request: WBDResolveRequest, db: sqlite3.Conne
         if not task:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"WBD task with ID {task_id} not found")
 
+        # Extract actual resolver identity from JWT
+        actor = get_actor_from_token(Authorization)
+
         db.execute(
             "UPDATE wbd_tasks SET status = 'resolved', decision = ?, comment = ? WHERE id = ?",
             (request.decision, request.comment, task_id)
@@ -437,7 +448,7 @@ def resolve_wbd_task(task_id: str, request: WBDResolveRequest, db: sqlite3.Conne
         db.commit()
         write_audit_log(
             db,
-            actor="system",
+            actor=actor,
             event_type="wbd_resolve",
             payload={"task_id": task_id},
             details={"decision": request.decision, "comment": request.comment}
@@ -452,6 +463,8 @@ def resolve_wbd_task(task_id: str, request: WBDResolveRequest, db: sqlite3.Conne
                 "resolved_at": datetime.utcnow().isoformat(),
             },
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error resolving WBD task: {str(e)}")
 

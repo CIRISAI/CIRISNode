@@ -11,12 +11,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-# Generate test tokens
-TEST_SECRET = "testsecret"
+from cirisnode.config import settings
 
 
 def _make_token(role: str = "admin") -> str:
-    return jwt.encode({"sub": "test@ciris.ai", "role": role}, TEST_SECRET, algorithm="HS256")
+    return jwt.encode({"sub": "test@ciris.ai", "role": role}, settings.JWT_SECRET, algorithm="HS256")
 
 
 ADMIN_TOKEN = _make_token("admin")

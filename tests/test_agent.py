@@ -7,7 +7,7 @@ import sqlite3
 client = TestClient(app)
 
 # Helper for generating a static JWT for test purposes
-TEST_SECRET = "testsecret"
+from cirisnode.config import settings
 TEST_AGENT_TOKEN = "test-agent-token-abc123"
 
 
@@ -23,7 +23,7 @@ def _ensure_agent_token():
 
 
 def get_admin_header():
-    token = jwt.encode({"sub": "testuser", "role": "admin"}, TEST_SECRET, algorithm="HS256")
+    token = jwt.encode({"sub": "testuser", "role": "admin"}, settings.JWT_SECRET, algorithm="HS256")
     return {"Authorization": f"Bearer {token}"}
 
 

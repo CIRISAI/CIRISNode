@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Header, status
 from pydantic import BaseModel
 from cirisnode.database import get_db
-from cirisnode.utils.rbac import require_role
+from cirisnode.auth.dependencies import require_role, require_agent_token
 from cirisnode.utils.audit import write_audit_log, sha256_payload
 import uuid
 import datetime
@@ -21,21 +21,6 @@ def _get_conn(db):
     return next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
 
 
-def _require_agent_token(
-    x_agent_token: str = Header(..., alias="x-agent-token"),
-    db=Depends(get_db),
-) -> str:
-    """Validate agent token. Returns the token as actor identifier."""
-    conn = _get_conn(db)
-    token_row = conn.execute(
-        "SELECT token, owner FROM agent_tokens WHERE token = ?",
-        (x_agent_token,)
-    ).fetchone()
-    if not token_row:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
-    return x_agent_token
-
-
 def _hash_event_json(event_json: str) -> str:
     """SHA-256 hash of event JSON content."""
     return hashlib.sha256(event_json.encode("utf-8")).hexdigest()
@@ -45,7 +30,7 @@ def _hash_event_json(event_json: str) -> str:
 async def post_agent_event(
     request: AgentEventRequest,
     db=Depends(get_db),
-    actor: str = Depends(_require_agent_token),
+    actor: str = Depends(require_agent_token),
 ):
     """
     Agents push Task / Thought / Action events for observability.
@@ -80,7 +65,7 @@ async def post_agent_event(
 @agent_router.get("/events")
 async def get_agent_events(
     db=Depends(get_db),
-    actor: str = Depends(_require_agent_token),
+    actor: str = Depends(require_agent_token),
 ):
     """
     List agent events. Requires valid agent token.

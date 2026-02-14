@@ -68,3 +68,27 @@ class Settings(BaseSettings):
         extra = Extra.allow  # Allow extra env vars (e.g., frontend-only vars in .env)
 
 settings = Settings()
+
+
+def _validate_jwt_secret():
+    """Warn or raise if JWT_SECRET is missing or insecure."""
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    secret = settings.JWT_SECRET
+    if not secret or secret == "testsecret":
+        # Detect production: DATABASE_URL pointing to a non-localhost host
+        db_url = settings.DATABASE_URL
+        is_prod = db_url and "localhost" not in db_url and "127.0.0.1" not in db_url and "db:" not in db_url
+        msg = (
+            "JWT_SECRET is not set or is using the insecure default 'testsecret'. "
+            "Set a strong JWT_SECRET environment variable."
+        )
+        if is_prod:
+            _logger.critical(msg)
+            raise RuntimeError(msg)
+        else:
+            _logger.warning(msg)
+
+
+_validate_jwt_secret()

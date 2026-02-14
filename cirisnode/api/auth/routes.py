@@ -4,13 +4,12 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 from typing import Optional, List
 import jwt
-from cirisnode.utils.rbac import require_role
+from cirisnode.auth.dependencies import require_role, decode_jwt, get_actor_from_token, ALGORITHM
+from cirisnode.auth.passwords import hash_password, verify_password
 from cirisnode.config import settings
 import hashlib
 import json
 
-SECRET_KEY = getattr(settings, "JWT_SECRET", None) or "testsecret"
-ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 ALLOWED_ADMIN_DOMAIN = "ciris.ai"
 
@@ -63,28 +62,35 @@ def login_for_access_token(
         (username,),
     ).fetchone()
     if row is None:
-        # Auto-create user with anonymous role
+        # Auto-create user with anonymous role (hashed password)
         conn.execute(
             "INSERT INTO users (username, password, role) VALUES (?, ?, 'anonymous')",
-            (username, password),
+            (username, hash_password(password)),
         )
         conn.commit()
         role = "anonymous"
     else:
         stored_pw, role = row
-        if stored_pw != password:
+        if not verify_password(password, stored_pw):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect username or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        # Auto-migrate legacy plaintext passwords to hashed
+        if stored_pw and "$" not in stored_pw:
+            conn.execute(
+                "UPDATE users SET password = ? WHERE username = ?",
+                (hash_password(password), username),
+            )
+            conn.commit()
 
     to_encode = {
         "sub": username,
         "role": role,
         "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     }
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET, algorithm=ALGORITHM)
     return {"access_token": encoded_jwt, "token_type": "bearer"}
 
 @auth_router.post("/auth/refresh", response_model=Token)
@@ -94,11 +100,15 @@ def refresh_access_token(Authorization: str = Header(...)):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
     token = Authorization.split(" ", 1)[1]
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = decode_jwt(token)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid token")
         username = payload.get("sub")
         role = payload.get("role", "anonymous")
         if not username:
             raise HTTPException(status_code=401, detail="Invalid token payload")
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
     # Issue new token
@@ -107,7 +117,7 @@ def refresh_access_token(Authorization: str = Header(...)):
         "role": role,
         "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     }
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET, algorithm=ALGORITHM)
     return {"access_token": encoded_jwt, "token_type": "bearer"}
 
 @auth_router.get("/auth/users", dependencies=[Depends(require_role(["admin"]))], response_model=list[UserOut])
@@ -215,15 +225,7 @@ def get_me(request: Request, db=Depends(get_db)):
         raise HTTPException(status_code=404, detail="User not found")
     return UserOut(id=user[0], username=user[1], role=user[2], groups=user[3] or '', oauth_provider=user[4], oauth_sub=user[5])
 
-def get_actor_from_token(Authorization: str) -> str:
-    if not Authorization.startswith("Bearer "):
-        return "unknown"
-    token = Authorization.split(" ", 1)[1]
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload.get("sub", "unknown")
-    except Exception:
-        return "unknown"
+# get_actor_from_token is now imported from cirisnode.auth.dependencies
 
 
 @auth_router.get("/api/v1/auth/check-access")

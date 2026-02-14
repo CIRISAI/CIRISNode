@@ -11,7 +11,8 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from cirisnode.main import app
-from cirisnode.api.auth.routes import SECRET_KEY, ALGORITHM
+from cirisnode.auth.dependencies import ALGORITHM
+from cirisnode.config import settings
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +41,7 @@ def test_get_token():
     data = response.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
-    decoded = jwt.decode(data["access_token"], SECRET_KEY, algorithms=[ALGORITHM])
+    decoded = jwt.decode(data["access_token"], settings.JWT_SECRET, algorithms=[ALGORITHM])
     assert decoded["role"] == "anonymous"
 
 
@@ -53,5 +54,5 @@ def test_refresh_token():
     data = response.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
-    decoded = jwt.decode(data["access_token"], SECRET_KEY, algorithms=[ALGORITHM])
+    decoded = jwt.decode(data["access_token"], settings.JWT_SECRET, algorithms=[ALGORITHM])
     assert decoded["role"] == "anonymous"

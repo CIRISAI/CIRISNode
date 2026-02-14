@@ -8,6 +8,7 @@ Includes integration with EthicsEngine Enterprise when enabled.
 from fastapi import APIRouter, HTTPException, Depends, Request, Header
 from cirisnode.database import get_db
 from cirisnode.config import settings
+from cirisnode.auth.dependencies import require_auth
 import json
 import os
 import requests
@@ -16,7 +17,6 @@ from uuid import uuid4
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from fastapi.responses import JSONResponse
-import jwt
 
 logger = logging.getLogger(__name__)
 
@@ -31,28 +31,16 @@ benchmark_jobs: Dict[str, Dict[str, Any]] = {}
 simplebench_jobs: Dict[str, Dict[str, Any]] = {}
 
 
-def validate_auth_token(authorization: str) -> bool:
-    """Validate JWT authorization token."""
-    if not authorization or not authorization.startswith("Bearer "):
-        return False
-    token = authorization.split(" ", 1)[1]
-    try:
-        jwt.decode(token, "testsecret", algorithms=["HS256"])
-        return True
-    except Exception:
-        return False
-
-
 # --- HE-300 Benchmark Endpoints ---
 
 @benchmarks_router.post("/run")
-async def run_benchmark(request: Request, Authorization: str = Header(None)):
+async def run_benchmark(request: Request, actor: str = Depends(require_auth)):
     """
-    Start an HE-300 benchmark job.
-    
+    Start an HE-300 benchmark job. Requires authentication.
+
     When EEE_ENABLED=true, this will submit scenarios to EthicsEngine Enterprise
     for evaluation. Otherwise, returns mock results.
-    
+
     Request body:
         - benchmark_type: "he300" (optional, defaults to he300)
         - scenario_id: Specific scenario to run (optional)
@@ -60,12 +48,10 @@ async def run_benchmark(request: Request, Authorization: str = Header(None)):
         - category: Filter by category (optional)
         - model: LLM model to use (optional)
         - n_scenarios: Number of scenarios to run (optional, default 300)
-        
+
     Returns:
         - job_id: Unique identifier for polling results
     """
-    if not validate_auth_token(Authorization):
-        raise HTTPException(status_code=400, detail="Missing or invalid Authorization header")
     
     data = await request.json()
     job_id = f"he300-{uuid4().hex[:12]}"
@@ -256,7 +242,8 @@ async def he300_health():
 # --- SimpleBench Endpoints (unchanged) ---
 
 @simplebench_router.post("/run")
-async def run_simplebench(request: Request):
+async def run_simplebench(request: Request, actor: str = Depends(require_auth)):
+    """Start a SimpleBench job. Requires authentication."""
     job_id = str(uuid4())
     # Simulate job creation
     simplebench_jobs[job_id] = {
@@ -276,7 +263,7 @@ async def get_simplebench_results(job_id: str):
 
 
 @simplebench_router.post("/run-sync")
-async def run_simplebench_sync(payload: dict, db=Depends(get_db)):
+async def run_simplebench_sync(payload: dict, db=Depends(get_db), actor: str = Depends(require_auth)):
     """
     Run a SimpleBench job synchronously.
     """

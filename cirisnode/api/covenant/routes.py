@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 from cirisnode.database import get_db
-from cirisnode.utils.rbac import require_role
+from cirisnode.auth.dependencies import require_role, require_agent_token
 from cryptography.hazmat.primitives.asymmetric import ed25519
 import base64
 import uuid
@@ -53,21 +53,6 @@ class PublicKeyRegistration(BaseModel):
 def _get_conn(db):
     """Unwrap the DB dependency to a connection."""
     return next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
-
-
-def _require_agent_token(
-    x_agent_token: str = Header(..., alias="x-agent-token"),
-    db=Depends(get_db),
-) -> str:
-    """Validate agent token. Returns the token as actor identifier."""
-    conn = _get_conn(db)
-    token_row = conn.execute(
-        "SELECT token, owner FROM agent_tokens WHERE token = ?",
-        (x_agent_token,)
-    ).fetchone()
-    if not token_row:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent token")
-    return x_agent_token
 
 
 def _verify_registry_key(org_id: str, key_id: str, public_key_base64: str) -> tuple:
@@ -278,7 +263,7 @@ async def register_public_key(
 @covenant_router.get("/public-keys")
 async def list_public_keys(
     db=Depends(get_db),
-    actor: str = Depends(_require_agent_token),
+    actor: str = Depends(require_agent_token),
 ):
     """List registered public keys with registry verification status."""
     conn = _get_conn(db)
@@ -306,7 +291,7 @@ async def list_public_keys(
 async def reverify_public_key(
     key_id: str,
     db=Depends(get_db),
-    actor: str = Depends(_require_agent_token),
+    actor: str = Depends(require_agent_token),
 ):
     """Re-check a key against the registry (e.g. after registry key activation)."""
     conn = _get_conn(db)
@@ -495,7 +480,7 @@ async def list_covenant_events(
     registry_verified_only: bool = False,
     limit: int = 100,
     db=Depends(get_db),
-    actor: str = Depends(_require_agent_token),
+    actor: str = Depends(require_agent_token),
 ):
     """List covenant trace events with optional filtering."""
     conn = _get_conn(db)

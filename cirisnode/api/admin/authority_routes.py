@@ -2,8 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from cirisnode.database import get_db
-from cirisnode.utils.rbac import require_role
-from cirisnode.api.auth.routes import get_actor_from_token
+from cirisnode.auth.dependencies import require_role, get_actor_from_token
 from cirisnode.utils.audit import write_audit_log
 import json
 

@@ -15,8 +15,7 @@ import sqlite3
 from cirisnode.database import get_db
 from cirisnode.utils.encryption import encrypt_data, decrypt_data
 from cirisnode.utils.audit import write_audit_log
-from cirisnode.utils.rbac import require_role, get_current_role
-from cirisnode.api.auth.routes import get_actor_from_token
+from cirisnode.auth.dependencies import require_role, get_current_role, get_actor_from_token
 from cirisnode.api.wa.routes import (
     WBDSubmitRequest,
     WBDResolveRequest,
@@ -139,19 +138,31 @@ def get_wbd_task(task_id: str, db: sqlite3.Connection = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@wbd_router.post("/tasks/{task_id}/resolve")
-def resolve_wbd_task(task_id: str, request: WBDResolveRequest, db: sqlite3.Connection = Depends(get_db)):
+@wbd_router.post(
+    "/tasks/{task_id}/resolve",
+    dependencies=[Depends(require_role(["admin", "wise_authority"]))],
+)
+def resolve_wbd_task(
+    task_id: str,
+    request: WBDResolveRequest,
+    Authorization: str = Header(...),
+    db: sqlite3.Connection = Depends(get_db),
+):
     if request.decision not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="Decision must be 'approve' or 'reject'")
-    task = db.execute("SELECT id FROM wbd_tasks WHERE id = ?", (task_id,)).fetchone()
+    task = db.execute("SELECT id, assigned_to FROM wbd_tasks WHERE id = ?", (task_id,)).fetchone()
     if not task:
         raise HTTPException(status_code=404, detail=f"WBD task {task_id} not found")
+
+    # Extract actual resolver identity from JWT
+    actor = get_actor_from_token(Authorization)
+
     db.execute(
         "UPDATE wbd_tasks SET status = 'resolved', decision = ?, comment = ?, resolved_at = ? WHERE id = ?",
         (request.decision, request.comment, datetime.utcnow().isoformat(), task_id),
     )
     db.commit()
-    write_audit_log(db, actor="system", event_type="wbd_resolve",
+    write_audit_log(db, actor=actor, event_type="wbd_resolve",
                     payload={"task_id": task_id},
                     details={"decision": request.decision, "comment": request.comment})
     return {
