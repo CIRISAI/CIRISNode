@@ -86,6 +86,6 @@ CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_wbd_tasks_status ON wbd_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_wbd_tasks_assigned ON wbd_tasks(assigned_to);
 CREATE INDEX IF NOT EXISTS idx_agent_events_agent_uid ON agent_events(agent_uid);
-CREATE INDEX IF NOT EXISTS idx_agent_events_deleted ON agent_events(deleted) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_agent_events_deleted ON agent_events(deleted) WHERE deleted = 0;
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC);

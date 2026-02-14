@@ -246,7 +246,7 @@ async def submit_wbd_task(request: WBDSubmitRequest):
             task_id = uuid.uuid4().hex[:8]
             await conn.execute(
                 "INSERT INTO wbd_tasks (id, agent_task_id, payload, status, created_at, domain_hint) VALUES ($1, $2, $3, 'open', $4, $5)",
-                task_id, request.agent_task_id, encrypt_data(request.payload), datetime.now(timezone.utc).isoformat(), request.domain_hint
+                task_id, request.agent_task_id, encrypt_data(request.payload), datetime.now(timezone.utc), request.domain_hint
             )
 
             # Auto-route to an authority
@@ -254,7 +254,7 @@ async def submit_wbd_task(request: WBDSubmitRequest):
             if assigned_to:
                 await conn.execute(
                     "UPDATE wbd_tasks SET assigned_to = $1, notified_at = $2 WHERE id = $3",
-                    assigned_to, datetime.now(timezone.utc).isoformat(), task_id,
+                    assigned_to, datetime.now(timezone.utc), task_id,
                 )
                 # Fire notification
                 notification_config = await _get_notification_config(conn, assigned_to)
@@ -305,9 +305,7 @@ async def get_wbd_tasks(
         async with pool.acquire() as conn:
             # Check for SLA breaches (24 hours) and auto-escalate
             from datetime import timedelta
-            sla_cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-
-            open_tasks = await conn.fetch("SELECT id, created_at FROM wbd_tasks WHERE status = 'open' AND created_at < $1", sla_cutoff)
+            open_tasks = await conn.fetch("SELECT id, created_at FROM wbd_tasks WHERE status = 'open' AND created_at < (NOW() - INTERVAL '24 hours')")
             for task in open_tasks:
                 task_id = task["id"]
                 await conn.execute("UPDATE wbd_tasks SET status = 'sla_breached' WHERE id = $1", task_id)
@@ -478,7 +476,7 @@ async def assign_wbd_task(task_id: str, request: WBDAssignRequest, Authorization
 
         await conn.execute(
             "UPDATE wbd_tasks SET assigned_to = $1, notified_at = $2 WHERE id = $3",
-            request.assigned_to, datetime.now(timezone.utc).isoformat(), task_id,
+            request.assigned_to, datetime.now(timezone.utc), task_id,
         )
 
         # Fire notification to new assignee
@@ -590,7 +588,7 @@ async def trigger_covenant_invocation(
                 wa_key_id,
                 actor,
                 signature_hex,
-                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc),
             )
         except Exception as e:
             logger.warning(f"Failed to record invocation (table may not exist yet): {e}")
@@ -617,7 +615,7 @@ async def trigger_covenant_invocation(
             # Mark as delivered
             await conn.execute(
                 "UPDATE covenant_invocations SET delivered = TRUE, delivered_at = $1 WHERE id = $2",
-                datetime.now(timezone.utc).isoformat(), invocation_id,
+                datetime.now(timezone.utc), invocation_id,
             )
         except Exception as e:
             logger.error(f"Failed to deliver covenant invocation: {e}")

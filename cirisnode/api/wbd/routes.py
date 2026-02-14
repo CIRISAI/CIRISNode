@@ -47,10 +47,8 @@ async def get_wbd_tasks(
         pool = await get_pg_pool()
         async with pool.acquire() as conn:
             # SLA auto-escalation
-            from datetime import timedelta
-            sla_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
             open_tasks = await conn.fetch(
-                "SELECT id FROM wbd_tasks WHERE status = 'open' AND created_at < $1", sla_cutoff
+                "SELECT id FROM wbd_tasks WHERE status = 'open' AND created_at < (NOW() - INTERVAL '24 hours')"
             )
             for task in open_tasks:
                 tid = task["id"]
@@ -166,7 +164,7 @@ async def resolve_wbd_task(
 
         await conn.execute(
             "UPDATE wbd_tasks SET status = 'resolved', decision = $1, comment = $2, resolved_at = $3 WHERE id = $4",
-            request.decision, request.comment, datetime.now(timezone.utc).isoformat(), task_id,
+            request.decision, request.comment, datetime.now(timezone.utc), task_id,
         )
     await write_audit_log(actor=actor, event_type="wbd_resolve",
                           payload={"task_id": task_id},
@@ -200,7 +198,7 @@ async def assign_wbd_task(task_id: str, request: WBDAssignRequest, Authorization
 
         await conn.execute(
             "UPDATE wbd_tasks SET assigned_to = $1, notified_at = $2 WHERE id = $3",
-            request.assigned_to, datetime.now(timezone.utc).isoformat(), task_id,
+            request.assigned_to, datetime.now(timezone.utc), task_id,
         )
 
         notification_config = await _get_notification_config(conn, request.assigned_to)
