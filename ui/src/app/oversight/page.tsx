@@ -419,6 +419,9 @@ function WBDQueue() {
    ============================================================================= */
 
 function AgentEventStream() {
+  const { data: session } = useSession();
+  const token = session?.user?.apiToken;
+
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -431,7 +434,7 @@ function AgentEventStream() {
 
   const fetchEvents = useCallback(async () => {
     try {
-      const data = await apiFetch<AgentEvent[]>("/api/v1/agent/events");
+      const data = await apiFetch<AgentEvent[]>("/api/v1/agent/events", { token });
       setEvents(Array.isArray(data) ? data : []);
       setError(null);
     } catch (err) {
@@ -451,7 +454,7 @@ function AgentEventStream() {
     try {
       await apiFetch(
         `/api/v1/agent/events/${id}/archive?archived=${archived}`,
-        { method: "PATCH" }
+        { method: "PATCH", token }
       );
       setEvents((prev) =>
         prev.map((e) => (e.id === id ? { ...e, archived } : e))
@@ -469,7 +472,7 @@ function AgentEventStream() {
       onConfirm: async () => {
         setConfirmState(null);
         try {
-          await apiFetch(`/api/v1/agent/events/${id}`, { method: "DELETE" });
+          await apiFetch(`/api/v1/agent/events/${id}`, { method: "DELETE", token });
           setEvents((prev) => prev.filter((e) => e.id !== id));
         } catch {
           setToast({ type: "error", message: "Failed to delete event" });

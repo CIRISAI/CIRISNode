@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useSession } from "next-auth/react";
 import { apiFetch } from "../../lib/api";
 import RoleGuard from "../../components/RoleGuard";
 import Toast, { type ToastState } from "../../components/Toast";
@@ -30,6 +31,9 @@ export default function SystemPage() {
 }
 
 function SystemContent() {
+  const { data: session } = useSession();
+  const token = session?.user?.apiToken;
+
   const [health, setHealth] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -194,6 +198,9 @@ const LEVEL_COLORS: Record<string, string> = {
 };
 
 function LogViewer() {
+  const { data: session } = useSession();
+  const token = session?.user?.apiToken;
+
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [level, setLevel] = useState<string>("ALL");
@@ -210,7 +217,8 @@ function LogViewer() {
       if (level !== "ALL") params.set("level", level);
       if (pattern.trim()) params.set("pattern", pattern.trim());
       const data = await apiFetch<{ logs: LogEntry[]; total: number }>(
-        `/api/v1/admin/logs?${params}`
+        `/api/v1/admin/logs?${params}`,
+        { token }
       );
       setLogs(data.logs || []);
       setTotal(data.total || 0);
@@ -219,7 +227,7 @@ function LogViewer() {
     } finally {
       setLoadingLogs(false);
     }
-  }, [level, pattern, limit]);
+  }, [level, pattern, limit, token]);
 
   useEffect(() => {
     setLoadingLogs(true);

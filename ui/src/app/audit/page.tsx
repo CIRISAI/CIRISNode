@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import { apiFetch } from "../../lib/api";
 
 interface AuditLog {
@@ -14,6 +15,9 @@ interface AuditLog {
 }
 
 export default function AuditPage() {
+  const { data: session } = useSession();
+  const token = session?.user?.apiToken;
+
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +31,7 @@ export default function AuditPage() {
   const fetchLogs = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiFetch<{ logs: AuditLog[] }>("/api/v1/audit/logs");
+      const data = await apiFetch<{ logs: AuditLog[] }>("/api/v1/audit/logs", { token });
       setLogs(data.logs || []);
       setError(null);
     } catch (err) {
@@ -35,7 +39,7 @@ export default function AuditPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     fetchLogs();

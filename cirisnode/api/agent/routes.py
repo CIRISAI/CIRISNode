@@ -1,7 +1,9 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Header, status
 from pydantic import BaseModel
 from cirisnode.database import get_db
-from cirisnode.auth.dependencies import require_role, require_agent_token
+from cirisnode.auth.dependencies import require_role, require_agent_token, decode_jwt
 from cirisnode.utils.audit import write_audit_log, sha256_payload
 import uuid
 import datetime
@@ -65,12 +67,31 @@ async def post_agent_event(
 @agent_router.get("/events")
 async def get_agent_events(
     db=Depends(get_db),
-    actor: str = Depends(require_agent_token),
+    x_agent_token: Optional[str] = Header(None, alias="x-agent-token"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
 ):
     """
-    List agent events. Requires valid agent token.
+    List agent events. Requires valid agent token or admin JWT.
     Soft-deleted events are excluded.
     """
+    # Accept admin JWT OR agent token
+    authed = False
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            payload = decode_jwt(authorization.split(" ", 1)[1])
+            if payload and payload.get("role") in ("admin", "wise_authority"):
+                authed = True
+        except (ValueError, Exception):
+            pass
+    if not authed and x_agent_token:
+        conn_check = _get_conn(db)
+        row = conn_check.execute(
+            "SELECT token FROM agent_tokens WHERE token = ?", (x_agent_token,)
+        ).fetchone()
+        if row:
+            authed = True
+    if not authed:
+        raise HTTPException(status_code=401, detail="Valid agent token or admin JWT required")
     conn = _get_conn(db)
     cur = conn.execute(
         "SELECT id, node_ts, agent_uid, event_json, original_content_hash "
