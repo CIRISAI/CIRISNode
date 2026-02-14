@@ -12,7 +12,7 @@ Key source of truth: CIRISPortal → CIRISRegistry (portal.ciris.ai)
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from cirisnode.database import get_db
+from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.auth.dependencies import require_role, require_agent_token
 from cryptography.hazmat.primitives.asymmetric import ed25519
 import base64
@@ -50,11 +50,6 @@ class PublicKeyRegistration(BaseModel):
 # Helpers
 # =========================================================================
 
-def _get_conn(db):
-    """Unwrap the DB dependency to a connection."""
-    return next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
-
-
 def _verify_registry_key(org_id: str, key_id: str, public_key_base64: str) -> tuple:
     """Cross-validate a public key against CIRISRegistry.
 
@@ -77,20 +72,20 @@ def _verify_registry_key(org_id: str, key_id: str, public_key_base64: str) -> tu
         # Auto-discover: compute fingerprint from public key and look up in Registry
         pubkey_bytes = base64.b64decode(public_key_base64)
         fingerprint = hashlib.sha256(pubkey_bytes).hexdigest()
-        found, discovered_org_id, registry_pubkey, status = client.get_key_by_fingerprint(fingerprint)
+        found, discovered_org_id, registry_pubkey, reg_status = client.get_key_by_fingerprint(fingerprint)
 
         if not found:
             return False, "key fingerprint not found in registry", ""
 
-        if status in ("KEY_REVOKED",):
-            return False, f"key revoked in registry (status={status})", discovered_org_id or ""
+        if reg_status in ("KEY_REVOKED",):
+            return False, f"key revoked in registry (status={reg_status})", discovered_org_id or ""
 
-        if status in ("KEY_PENDING",):
-            return False, f"key not yet active in registry (status={status})", discovered_org_id or ""
+        if reg_status in ("KEY_PENDING",):
+            return False, f"key not yet active in registry (status={reg_status})", discovered_org_id or ""
 
         # Compare the public key bytes
         if registry_pubkey == pubkey_bytes:
-            return True, f"verified via fingerprint (status={status})", discovered_org_id or ""
+            return True, f"verified via fingerprint (status={reg_status})", discovered_org_id or ""
         else:
             return False, "public key mismatch — fingerprint matched but key bytes differ", discovered_org_id or ""
 
@@ -99,7 +94,7 @@ def _verify_registry_key(org_id: str, key_id: str, public_key_base64: str) -> tu
         return False, f"registry unavailable: {e}", org_id or ""
 
 
-def _verify_trace_signature(trace: Dict[str, Any], conn) -> Optional[str]:
+async def _verify_trace_signature(trace: Dict[str, Any], conn) -> Optional[str]:
     """Verify Ed25519 signature on a trace against registered public keys.
 
     Returns the key_id if verified, None if no signature or verification fails.
@@ -111,17 +106,17 @@ def _verify_trace_signature(trace: Dict[str, Any], conn) -> Optional[str]:
         return None
 
     # Look up registered public key
-    row = conn.execute(
-        "SELECT public_key_base64 FROM covenant_public_keys WHERE key_id = ? AND algorithm = 'ed25519'",
-        (key_id,)
-    ).fetchone()
+    row = await conn.fetchrow(
+        "SELECT public_key_base64 FROM covenant_public_keys WHERE key_id = $1 AND algorithm = 'ed25519'",
+        key_id
+    )
     if not row:
         logger.warning(f"Unknown signing key_id: {key_id}")
         return None
 
     try:
         # Decode public key
-        pubkey_bytes = base64.b64decode(row[0])
+        pubkey_bytes = base64.b64decode(row["public_key_base64"])
         public_key = ed25519.Ed25519PublicKey.from_public_bytes(pubkey_bytes)
 
         # Reconstruct the canonical signed message (same as agent's sign_trace)
@@ -152,37 +147,36 @@ def _verify_trace_signature(trace: Dict[str, Any], conn) -> Optional[str]:
         return None
 
 
-def _is_key_registry_verified(key_id: str, conn) -> bool:
+async def _is_key_registry_verified(key_id: str, conn) -> bool:
     """Check if a key has been verified against the registry."""
-    row = conn.execute(
-        "SELECT registry_verified FROM covenant_public_keys WHERE key_id = ?",
-        (key_id,)
-    ).fetchone()
-    return bool(row and row[0])
+    row = await conn.fetchrow(
+        "SELECT registry_verified FROM covenant_public_keys WHERE key_id = $1",
+        key_id
+    )
+    return bool(row and row["registry_verified"])
 
 
 # =========================================================================
 # Public Key Registration (with registry cross-validation)
 # =========================================================================
 
-def _optional_agent_token(
+async def _optional_agent_token(
     x_agent_token: Optional[str] = Header(None, alias="x-agent-token"),
-    db=Depends(get_db),
 ) -> Optional[str]:
     """Optionally validate agent token. Returns token or None."""
     if not x_agent_token:
         return None
-    conn = _get_conn(db)
-    token_row = conn.execute(
-        "SELECT token FROM agent_tokens WHERE token = ?", (x_agent_token,)
-    ).fetchone()
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        token_row = await conn.fetchrow(
+            "SELECT token FROM agent_tokens WHERE token = $1", x_agent_token
+        )
     return x_agent_token if token_row else None
 
 
 @covenant_router.post("/public-keys")
 async def register_public_key(
     request: PublicKeyRegistration,
-    db=Depends(get_db),
     actor: Optional[str] = Depends(_optional_agent_token),
 ):
     """
@@ -192,60 +186,57 @@ async def register_public_key(
     Keys are cross-validated against CIRISRegistry (source of truth: CIRISPortal).
     Idempotent — returns 200 if key already registered.
     """
-    conn = _get_conn(db)
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        # Check if already registered
+        existing = await conn.fetchrow(
+            "SELECT key_id, registry_verified FROM covenant_public_keys WHERE key_id = $1",
+            request.key_id
+        )
+        if existing:
+            return {
+                "status": "already_registered",
+                "key_id": request.key_id,
+                "registry_verified": bool(existing["registry_verified"]),
+            }
 
-    # Check if already registered
-    existing = conn.execute(
-        "SELECT key_id, registry_verified FROM covenant_public_keys WHERE key_id = ?",
-        (request.key_id,)
-    ).fetchone()
-    if existing:
-        return {
-            "status": "already_registered",
-            "key_id": request.key_id,
-            "registry_verified": bool(existing[1]),
-        }
+        # Validate the key is valid Ed25519
+        try:
+            pubkey_bytes = base64.b64decode(request.public_key_base64)
+            ed25519.Ed25519PublicKey.from_public_bytes(pubkey_bytes)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid Ed25519 public key: {e}")
 
-    # Validate the key is valid Ed25519
-    try:
-        pubkey_bytes = base64.b64decode(request.public_key_base64)
-        ed25519.Ed25519PublicKey.from_public_bytes(pubkey_bytes)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid Ed25519 public key: {e}")
+        # Cross-validate against CIRISRegistry (auto-discovers org_id via fingerprint)
+        registry_verified, registry_status, discovered_org_id = _verify_registry_key(
+            request.org_id, request.key_id, request.public_key_base64
+        )
+        # Use discovered org_id if agent didn't provide one
+        effective_org_id = request.org_id or discovered_org_id or ""
+        logger.info(
+            f"Registry validation for key_id={request.key_id} org_id={effective_org_id}: "
+            f"verified={registry_verified} reason={registry_status}"
+        )
 
-    # Cross-validate against CIRISRegistry (auto-discovers org_id via fingerprint)
-    registry_verified, registry_status, discovered_org_id = _verify_registry_key(
-        request.org_id, request.key_id, request.public_key_base64
-    )
-    # Use discovered org_id if agent didn't provide one
-    effective_org_id = request.org_id or discovered_org_id or ""
-    logger.info(
-        f"Registry validation for key_id={request.key_id} org_id={effective_org_id}: "
-        f"verified={registry_verified} reason={registry_status}"
-    )
+        registered_by = actor or f"self-register:{request.key_id[:16]}"
 
-    registered_by = actor or f"self-register:{request.key_id[:16]}"
-
-    conn.execute(
-        """
-        INSERT INTO covenant_public_keys
-            (key_id, public_key_base64, algorithm, description, registered_by,
-             org_id, registry_verified, registry_status, registered_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
+        await conn.execute(
+            """
+            INSERT INTO covenant_public_keys
+                (key_id, public_key_base64, algorithm, description, registered_by,
+                 org_id, registry_verified, registry_status, registered_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            """,
             request.key_id,
             request.public_key_base64,
             request.algorithm,
             request.description,
             registered_by,
             effective_org_id or None,
-            1 if registry_verified else 0,
+            registry_verified,
             registry_status,
-            datetime.datetime.utcnow(),
-        ),
-    )
-    conn.commit()
+            datetime.datetime.now(datetime.timezone.utc),
+        )
 
     logger.info(
         f"Public key registered: key_id={request.key_id} by={registered_by} "
@@ -262,26 +253,26 @@ async def register_public_key(
 
 @covenant_router.get("/public-keys")
 async def list_public_keys(
-    db=Depends(get_db),
     actor: str = Depends(require_agent_token),
 ):
     """List registered public keys with registry verification status."""
-    conn = _get_conn(db)
-    rows = conn.execute(
-        """SELECT key_id, algorithm, description, registered_by, org_id,
-                  registry_verified, registry_status, registered_at
-           FROM covenant_public_keys ORDER BY registered_at DESC"""
-    ).fetchall()
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT key_id, algorithm, description, registered_by, org_id,
+                      registry_verified, registry_status, registered_at
+               FROM covenant_public_keys ORDER BY registered_at DESC"""
+        )
     return [
         {
-            "key_id": row[0],
-            "algorithm": row[1],
-            "description": row[2],
-            "registered_by": row[3],
-            "org_id": row[4],
-            "registry_verified": bool(row[5]),
-            "registry_status": row[6],
-            "registered_at": str(row[7]),
+            "key_id": row["key_id"],
+            "algorithm": row["algorithm"],
+            "description": row["description"],
+            "registered_by": row["registered_by"],
+            "org_id": row["org_id"],
+            "registry_verified": bool(row["registry_verified"]),
+            "registry_status": row["registry_status"],
+            "registered_at": str(row["registered_at"]),
         }
         for row in rows
     ]
@@ -290,30 +281,28 @@ async def list_public_keys(
 @covenant_router.post("/public-keys/{key_id}/reverify")
 async def reverify_public_key(
     key_id: str,
-    db=Depends(get_db),
     actor: str = Depends(require_agent_token),
 ):
     """Re-check a key against the registry (e.g. after registry key activation)."""
-    conn = _get_conn(db)
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT public_key_base64, org_id FROM covenant_public_keys WHERE key_id = $1",
+            key_id
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Key not found")
 
-    row = conn.execute(
-        "SELECT public_key_base64, org_id FROM covenant_public_keys WHERE key_id = ?",
-        (key_id,)
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Key not found")
+        public_key_base64, org_id = row["public_key_base64"], row["org_id"]
+        if not org_id:
+            return {"status": "no_org_id", "key_id": key_id, "registry_verified": False}
 
-    public_key_base64, org_id = row[0], row[1]
-    if not org_id:
-        return {"status": "no_org_id", "key_id": key_id, "registry_verified": False}
+        registry_verified, registry_status = _verify_registry_key(org_id, key_id, public_key_base64)
 
-    registry_verified, registry_status = _verify_registry_key(org_id, key_id, public_key_base64)
-
-    conn.execute(
-        "UPDATE covenant_public_keys SET registry_verified = ?, registry_status = ? WHERE key_id = ?",
-        (1 if registry_verified else 0, registry_status, key_id),
-    )
-    conn.commit()
+        await conn.execute(
+            "UPDATE covenant_public_keys SET registry_verified = $1, registry_status = $2 WHERE key_id = $3",
+            registry_verified, registry_status, key_id,
+        )
 
     return {
         "status": "reverified",
@@ -336,38 +325,40 @@ class AdminKeyUpdate(BaseModel):
 async def admin_update_public_key(
     key_id: str,
     request: AdminKeyUpdate,
-    db=Depends(get_db),
 ):
     """Admin: update org_id, registry_verified, or registry_status on a covenant key."""
-    conn = _get_conn(db)
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT key_id FROM covenant_public_keys WHERE key_id = $1", key_id
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Key not found")
 
-    row = conn.execute(
-        "SELECT key_id FROM covenant_public_keys WHERE key_id = ?", (key_id,)
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Key not found")
+        updates = []
+        params = []
+        param_idx = 1
+        if request.org_id is not None:
+            updates.append(f"org_id = ${param_idx}")
+            params.append(request.org_id)
+            param_idx += 1
+        if request.registry_verified is not None:
+            updates.append(f"registry_verified = ${param_idx}")
+            params.append(request.registry_verified)
+            param_idx += 1
+        if request.registry_status is not None:
+            updates.append(f"registry_status = ${param_idx}")
+            params.append(request.registry_status)
+            param_idx += 1
 
-    updates = []
-    params = []
-    if request.org_id is not None:
-        updates.append("org_id = ?")
-        params.append(request.org_id)
-    if request.registry_verified is not None:
-        updates.append("registry_verified = ?")
-        params.append(1 if request.registry_verified else 0)
-    if request.registry_status is not None:
-        updates.append("registry_status = ?")
-        params.append(request.registry_status)
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
 
-    if not updates:
-        raise HTTPException(status_code=400, detail="No fields to update")
-
-    params.append(key_id)
-    conn.execute(
-        f"UPDATE covenant_public_keys SET {', '.join(updates)} WHERE key_id = ?",
-        params,
-    )
-    conn.commit()
+        params.append(key_id)
+        await conn.execute(
+            f"UPDATE covenant_public_keys SET {', '.join(updates)} WHERE key_id = ${param_idx}",
+            *params,
+        )
 
     logger.info(f"Admin updated key {key_id}: {dict(request)}")
     return {"status": "updated", "key_id": key_id, "updates": dict(request)}
@@ -380,7 +371,6 @@ async def admin_update_public_key(
 @covenant_router.post("/events")
 async def receive_covenant_events(
     request: CovenantBatchRequest,
-    db=Depends(get_db),
 ):
     """
     Receive covenant trace events from agents in Lens batch format.
@@ -392,78 +382,75 @@ async def receive_covenant_events(
 
     No header-based auth required. The signature IS the auth.
     """
-    conn = _get_conn(db)
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        # First pass: verify all signatures and check registry status
+        event_rows = []
+        verified_count = 0
+        registry_verified_count = 0
 
-    # First pass: verify all signatures and check registry status
-    event_rows = []
-    verified_count = 0
-    registry_verified_count = 0
+        for event in request.events:
+            trace = event.get("trace", {})
+            event_id = str(uuid.uuid4())
+            event_json = json.dumps(event, sort_keys=True)
+            content_hash = hashlib.sha256(event_json.encode("utf-8")).hexdigest()
 
-    for event in request.events:
-        trace = event.get("trace", {})
-        event_id = str(uuid.uuid4())
-        event_json = json.dumps(event, sort_keys=True)
-        content_hash = hashlib.sha256(event_json.encode("utf-8")).hexdigest()
+            verified_key_id = await _verify_trace_signature(trace, conn)
+            signature_verified = verified_key_id is not None
+            if signature_verified:
+                verified_count += 1
+                if await _is_key_registry_verified(verified_key_id, conn):
+                    registry_verified_count += 1
 
-        verified_key_id = _verify_trace_signature(trace, conn)
-        signature_verified = verified_key_id is not None
-        is_registry_verified = False
-        if signature_verified:
-            verified_count += 1
-            if _is_key_registry_verified(verified_key_id, conn):
-                registry_verified_count += 1
-                is_registry_verified = True
+            event_rows.append((
+                event_id,
+                trace.get("agent_id_hash", event.get("agent_uid", "")),
+                trace.get("trace_id", ""),
+                trace.get("thought_id", ""),
+                trace.get("task_id", ""),
+                request.trace_level,
+                event_json,
+                content_hash,
+                signature_verified,
+                verified_key_id,
+                datetime.datetime.now(datetime.timezone.utc),
+            ))
 
-        event_rows.append((
-            event_id,
-            trace.get("agent_id_hash", event.get("agent_uid", "")),
-            trace.get("trace_id", ""),
-            trace.get("thought_id", ""),
-            trace.get("task_id", ""),
-            request.trace_level,
-            event_json,
-            content_hash,
-            1 if signature_verified else 0,
-            verified_key_id,
-            datetime.datetime.utcnow(),
-        ))
+        # Auth gate: at least one trace must be signed by a key registered
+        # in CIRISPortal/CIRISRegistry. This is the signature-based auth model.
+        if registry_verified_count == 0:
+            # Provide helpful detail depending on what we found
+            if verified_count > 0:
+                detail = (
+                    f"Traces are signed ({verified_count} verified) but the signing key "
+                    f"is not registry-verified. Keys must be registered via "
+                    f"CIRISPortal (portal.ciris.ai) and validated against CIRISRegistry."
+                )
+            elif any(event.get("trace", {}).get("signature") for event in request.events):
+                detail = (
+                    "Trace signatures present but verification failed. "
+                    "Ensure the signing key is registered with CIRISNode and "
+                    "cross-validated via CIRISPortal (portal.ciris.ai)."
+                )
+            else:
+                detail = (
+                    "No signatures found on traces. Agents must sign traces with "
+                    "their Ed25519 key (registered via CIRISPortal/CIRISRegistry)."
+                )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
-    # Auth gate: at least one trace must be signed by a key registered
-    # in CIRISPortal/CIRISRegistry. This is the signature-based auth model.
-    if registry_verified_count == 0:
-        # Provide helpful detail depending on what we found
-        if verified_count > 0:
-            detail = (
-                f"Traces are signed ({verified_count} verified) but the signing key "
-                f"is not registry-verified. Keys must be registered via "
-                f"CIRISPortal (portal.ciris.ai) and validated against CIRISRegistry."
+        # Insert all verified events
+        for row in event_rows:
+            await conn.execute(
+                """
+                INSERT INTO covenant_traces
+                    (id, agent_uid, trace_id, thought_id, task_id, trace_level,
+                     trace_json, content_hash, signature_verified, signing_key_id, received_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                """,
+                *row,
             )
-        elif any(event.get("trace", {}).get("signature") for event in request.events):
-            detail = (
-                "Trace signatures present but verification failed. "
-                "Ensure the signing key is registered with CIRISNode and "
-                "cross-validated via CIRISPortal (portal.ciris.ai)."
-            )
-        else:
-            detail = (
-                "No signatures found on traces. Agents must sign traces with "
-                "their Ed25519 key (registered via CIRISPortal/CIRISRegistry)."
-            )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
-    # Insert all verified events
-    for row in event_rows:
-        conn.execute(
-            """
-            INSERT INTO covenant_traces
-                (id, agent_uid, trace_id, thought_id, task_id, trace_level,
-                 trace_json, content_hash, signature_verified, signing_key_id, received_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            row,
-        )
-
-    conn.commit()
     return {
         "status": "ok",
         "events_received": len(event_rows),
@@ -479,49 +466,55 @@ async def list_covenant_events(
     verified_only: bool = False,
     registry_verified_only: bool = False,
     limit: int = 100,
-    db=Depends(get_db),
     actor: str = Depends(require_agent_token),
 ):
     """List covenant trace events with optional filtering."""
-    conn = _get_conn(db)
-    query = """SELECT ct.id, ct.agent_uid, ct.trace_id, ct.thought_id, ct.task_id,
+    pool = await get_pg_pool()
+
+    # Build dynamic query with numbered params
+    base_query = """SELECT ct.id, ct.agent_uid, ct.trace_id, ct.thought_id, ct.task_id,
                       ct.trace_level, ct.trace_json, ct.content_hash,
                       ct.signature_verified, ct.signing_key_id, ct.received_at,
-                      COALESCE(cpk.registry_verified, 0) as registry_verified
+                      COALESCE(cpk.registry_verified, FALSE) as registry_verified
                FROM covenant_traces ct
                LEFT JOIN covenant_public_keys cpk ON ct.signing_key_id = cpk.key_id
                WHERE 1=1"""
     params: list = []
+    param_idx = 1
 
     if agent_uid:
-        query += " AND ct.agent_uid = ?"
+        base_query += f" AND ct.agent_uid = ${param_idx}"
         params.append(agent_uid)
+        param_idx += 1
     if trace_level:
-        query += " AND ct.trace_level = ?"
+        base_query += f" AND ct.trace_level = ${param_idx}"
         params.append(trace_level)
+        param_idx += 1
     if verified_only:
-        query += " AND ct.signature_verified = 1"
+        base_query += " AND ct.signature_verified = TRUE"
     if registry_verified_only:
-        query += " AND cpk.registry_verified = 1"
+        base_query += " AND cpk.registry_verified = TRUE"
 
-    query += " ORDER BY ct.received_at DESC LIMIT ?"
+    base_query += f" ORDER BY ct.received_at DESC LIMIT ${param_idx}"
     params.append(limit)
 
-    rows = conn.execute(query, params).fetchall()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(base_query, *params)
+
     return [
         {
-            "id": row[0],
-            "agent_uid": row[1],
-            "trace_id": row[2],
-            "thought_id": row[3],
-            "task_id": row[4],
-            "trace_level": row[5],
-            "trace": json.loads(row[6]) if row[6] else None,
-            "content_hash": row[7],
-            "signature_verified": bool(row[8]),
-            "signing_key_id": row[9],
-            "received_at": str(row[10]),
-            "registry_verified": bool(row[11]),
+            "id": row["id"],
+            "agent_uid": row["agent_uid"],
+            "trace_id": row["trace_id"],
+            "thought_id": row["thought_id"],
+            "task_id": row["task_id"],
+            "trace_level": row["trace_level"],
+            "trace": json.loads(row["trace_json"]) if isinstance(row["trace_json"], str) else row["trace_json"],
+            "content_hash": row["content_hash"],
+            "signature_verified": bool(row["signature_verified"]),
+            "signing_key_id": row["signing_key_id"],
+            "received_at": str(row["received_at"]),
+            "registry_verified": bool(row["registry_verified"]),
         }
         for row in rows
     ]

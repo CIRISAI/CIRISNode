@@ -46,6 +46,6 @@ async def test_llm_connection(request: LLMTestRequest):
             raise HTTPException(status_code=400, detail="Invalid provider")
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Error testing LLM connection")
         raise HTTPException(status_code=500, detail="Internal server error")

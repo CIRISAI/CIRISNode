@@ -17,9 +17,13 @@ _pool: Optional[asyncpg.Pool] = None
 
 
 async def get_pg_pool() -> asyncpg.Pool:
-    """Get or create the shared asyncpg connection pool."""
+    """Get or create the shared asyncpg connection pool.
+
+    Automatically recreates the pool if it was previously closed
+    (e.g. after app lifespan shutdown in tests).
+    """
     global _pool
-    if _pool is None:
+    if _pool is None or _pool._closed:
         logger.info("Creating PostgreSQL connection pool: %s", settings.DATABASE_URL)
         _pool = await asyncpg.create_pool(
             settings.DATABASE_URL,

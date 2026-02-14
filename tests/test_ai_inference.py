@@ -1,4 +1,3 @@
-import pytest
 
 # Mock function for ethical pipeline since the actual implementation may not exist yet
 def run_ethical_pipeline(sample):

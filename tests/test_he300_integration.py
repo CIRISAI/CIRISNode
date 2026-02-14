@@ -7,11 +7,10 @@ mocking external EEE dependencies to enable independent testing.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
-import json
 
 # Import the app
 from cirisnode.main import app
-from cirisnode.utils.eee_client import EEEClient, EEEClientError
+from cirisnode.utils.eee_client import EEEClient
 from cirisnode.utils.data_loaders import load_he300_data, sample_he300_scenarios
 
 
@@ -126,9 +125,9 @@ class TestBenchmarkRoutes:
     """Test benchmark API routes."""
     
     @pytest.fixture
-    def test_client(self):
-        """Create test client."""
-        return TestClient(app)
+    def test_client(self, client):
+        """Reuse shared test client."""
+        return client
         
     def test_run_benchmark_requires_auth(self, test_client):
         """Test that benchmark endpoint requires authentication."""
@@ -156,9 +155,9 @@ class TestBenchmarkWithMockedEEE:
     """Test benchmark execution with mocked EEE client."""
     
     @pytest.fixture
-    def test_client(self):
-        """Create test client with mocked dependencies."""
-        return TestClient(app)
+    def test_client(self, client):
+        """Reuse shared test client."""
+        return client
         
     @pytest.fixture
     def mock_jwt_token(self):

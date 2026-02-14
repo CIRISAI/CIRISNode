@@ -1,7 +1,6 @@
 """Lightweight async notification dispatcher for WBD task routing."""
 
 import logging
-import json
 from typing import Optional, Dict, Any
 
 import httpx

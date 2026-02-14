@@ -1,9 +1,8 @@
 from fastapi import APIRouter, HTTPException, status, Depends, Header
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
-from datetime import datetime
-from cirisnode.database import get_db
-import sqlite3
+from typing import Optional, Dict, Any
+from datetime import datetime, timezone
+from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.utils.encryption import encrypt_data, decrypt_data
 from cirisnode.utils.audit import write_audit_log
 from cirisnode.auth.dependencies import require_role, get_current_role, get_actor_from_token
@@ -11,7 +10,6 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 import base64
 import uuid
 import json
-import hashlib
 import logging
 import asyncio
 
@@ -53,7 +51,7 @@ class DeferralRequest(BaseModel):
     signature_key_id: Optional[str] = None
 
 
-def _verify_wbd_signature(request: WBDSubmitRequest, conn) -> Optional[str]:
+async def _verify_wbd_signature(request: WBDSubmitRequest, conn) -> Optional[str]:
     """Verify Ed25519 signature on a WBD deferral submission.
 
     The signed message is canonical JSON of the submission content
@@ -66,16 +64,16 @@ def _verify_wbd_signature(request: WBDSubmitRequest, conn) -> Optional[str]:
         return None
 
     # Look up registered public key
-    row = conn.execute(
+    row = await conn.fetchrow(
         "SELECT public_key_base64, registry_verified FROM covenant_public_keys "
-        "WHERE key_id = ? AND algorithm = 'ed25519'",
-        (request.signature_key_id,)
-    ).fetchone()
+        "WHERE key_id = $1 AND algorithm = 'ed25519'",
+        request.signature_key_id
+    )
     if not row:
         logger.warning(f"WBD submit: unknown signing key_id: {request.signature_key_id}")
         return None
 
-    public_key_base64, registry_verified = row[0], row[1]
+    public_key_base64, registry_verified = row["public_key_base64"], row["registry_verified"]
 
     # Key must be registry-verified (registered via CIRISPortal/CIRISRegistry)
     if not registry_verified:
@@ -117,47 +115,35 @@ def _verify_wbd_signature(request: WBDSubmitRequest, conn) -> Optional[str]:
         return None
 
 
-def _route_wbd_task(conn, domain_hint: Optional[str], agent_task_id: Optional[str] = None) -> Optional[str]:
-    """Auto-route a WBD task to the best available authority.
-
-    1. Match by expertise domain
-    2. Filter by assigned agent IDs (empty = all agents)
-    3. Filter by availability (current time in their windows)
-    4. Return first match, or None if no match
-    """
-    profiles = conn.execute("""
+async def _route_wbd_task(conn, domain_hint: Optional[str], agent_task_id: Optional[str] = None) -> Optional[str]:
+    """Auto-route a WBD task to the best available authority."""
+    rows = await conn.fetch("""
         SELECT u.username, ap.expertise_domains, ap.assigned_agent_ids,
                ap.availability, ap.notification_config
         FROM authority_profiles ap
         JOIN users u ON u.id = ap.user_id
         WHERE u.role IN ('wise_authority', 'admin')
-    """).fetchall()
+    """)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
-    for row in profiles:
-        username = row[0]
-        expertise = json.loads(row[1] or "[]")
-        agent_ids = json.loads(row[2] or "[]")
-        availability = json.loads(row[3] or "{}")
+    for row in rows:
+        username = row["username"]
+        expertise = json.loads(row["expertise_domains"] or "[]")
+        agent_ids = json.loads(row["assigned_agent_ids"] or "[]")
+        availability = json.loads(row["availability"] or "{}")
 
-        # Check expertise domain match (skip if no domain_hint or authority covers all domains)
         if domain_hint and expertise and domain_hint not in expertise:
             continue
-
-        # Check agent assignment (empty = all agents)
         if agent_ids and agent_task_id:
-            # Extract agent_uid from agent_task_id if possible
             if not any(aid in agent_task_id for aid in agent_ids):
                 continue
-
-        # Check availability
         if availability and availability.get("windows"):
             try:
                 import zoneinfo
                 tz = zoneinfo.ZoneInfo(availability.get("timezone", "UTC"))
-                local_now = now.astimezone(tz) if now.tzinfo else now.replace(tzinfo=zoneinfo.ZoneInfo("UTC")).astimezone(tz)
-                weekday = local_now.isoweekday()  # 1=Mon, 7=Sun
+                local_now = now.astimezone(tz)
+                weekday = local_now.isoweekday()
                 current_time = local_now.strftime("%H:%M")
                 in_window = False
                 for window in availability["windows"]:
@@ -170,27 +156,25 @@ def _route_wbd_task(conn, domain_hint: Optional[str], agent_task_id: Optional[st
                 if not in_window:
                     continue
             except Exception:
-                pass  # If timezone parsing fails, don't filter by availability
-
+                pass
         return username
-
     return None
 
 
-def _get_notification_config(conn, username: str) -> dict:
+async def _get_notification_config(conn, username: str) -> dict:
     """Get notification config for a user."""
-    row = conn.execute("""
+    row = await conn.fetchrow("""
         SELECT ap.notification_config
         FROM authority_profiles ap
         JOIN users u ON u.id = ap.user_id
-        WHERE u.username = ?
-    """, (username,)).fetchone()
+        WHERE u.username = $1
+    """, username)
     if row:
-        return json.loads(row[0] or "{}")
+        return json.loads(row["notification_config"] or "{}")
     return {}
 
 
-def _fire_notification(username: str, notification_config: dict, task_id: int, agent_task_id: str, domain_hint: Optional[str]):
+def _fire_notification(username: str, notification_config: dict, task_id, agent_task_id: str, domain_hint: Optional[str]):
     """Fire-and-forget notification (best effort)."""
     try:
         from cirisnode.services.notifications import notify_authority
@@ -220,17 +204,17 @@ def _fire_notification(username: str, notification_config: dict, task_id: int, a
     dependencies=[Depends(require_role(["admin"]))],
     response_model=dict,
 )
-def create_agent_token(db: sqlite3.Connection = Depends(get_db), Authorization: str = Header(...)):
+async def create_agent_token(Authorization: str = Header(...)):
     token = uuid.uuid4().hex
-    conn = db
     actor = get_actor_from_token(Authorization)
-    conn.execute("INSERT INTO agent_tokens (token, owner) VALUES (?, ?)", (token, actor))
-    conn.commit()
-    write_audit_log(conn, actor=actor, event_type="create_agent_token", payload={"token": token})
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("INSERT INTO agent_tokens (token, owner) VALUES ($1, $2)", token, actor)
+    await write_audit_log(actor=actor, event_type="create_agent_token", payload={"token": token})
     return {"token": token}
 
 @wa_router.post("/submit", response_model=dict)
-def submit_wbd_task(request: WBDSubmitRequest, db: sqlite3.Connection = Depends(get_db)):
+async def submit_wbd_task(request: WBDSubmitRequest):
     """Submit a new WBD task (deferral) for review.
 
     Auth: Ed25519 signature verification. The deferral payload must be signed
@@ -239,181 +223,182 @@ def submit_wbd_task(request: WBDSubmitRequest, db: sqlite3.Connection = Depends(
 
     Auto-routes to the best available Wise Authority based on domain expertise.
     """
-    # Signature-based auth: verify the deferral is signed by a registered agent
-    verified_key_id = _verify_wbd_signature(request, db)
-    if not verified_key_id:
-        if not request.signature:
-            detail = (
-                "Deferral must be signed with the agent's Ed25519 key. "
-                "Keys are registered via CIRISPortal (portal.ciris.ai) → CIRISRegistry."
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        # Signature-based auth: verify the deferral is signed by a registered agent
+        verified_key_id = await _verify_wbd_signature(request, conn)
+        if not verified_key_id:
+            if not request.signature:
+                detail = (
+                    "Deferral must be signed with the agent's Ed25519 key. "
+                    "Keys are registered via CIRISPortal (portal.ciris.ai) → CIRISRegistry."
+                )
+            elif not request.signature_key_id:
+                detail = "Missing signature_key_id field."
+            else:
+                detail = (
+                    f"Signature verification failed for key_id={request.signature_key_id}. "
+                    f"Ensure the key is registered and verified via CIRISPortal/CIRISRegistry."
+                )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+        try:
+            task_id = uuid.uuid4().hex[:8]
+            await conn.execute(
+                "INSERT INTO wbd_tasks (id, agent_task_id, payload, status, created_at, domain_hint) VALUES ($1, $2, $3, 'open', $4, $5)",
+                task_id, request.agent_task_id, encrypt_data(request.payload), datetime.now(timezone.utc).isoformat(), request.domain_hint
             )
-        elif not request.signature_key_id:
-            detail = "Missing signature_key_id field."
-        else:
-            detail = (
-                f"Signature verification failed for key_id={request.signature_key_id}. "
-                f"Ensure the key is registered and verified via CIRISPortal/CIRISRegistry."
+
+            # Auto-route to an authority
+            assigned_to = await _route_wbd_task(conn, request.domain_hint, request.agent_task_id)
+            if assigned_to:
+                await conn.execute(
+                    "UPDATE wbd_tasks SET assigned_to = $1, notified_at = $2 WHERE id = $3",
+                    assigned_to, datetime.now(timezone.utc).isoformat(), task_id,
+                )
+                # Fire notification
+                notification_config = await _get_notification_config(conn, assigned_to)
+                _fire_notification(assigned_to, notification_config, task_id, request.agent_task_id, request.domain_hint)
+
+            # Log the WBD task submission to audit (actor = signing key)
+            await write_audit_log(
+                actor=f"agent:{verified_key_id}",
+                event_type="wbd_submit",
+                payload={"task_id": task_id},
+                details={"agent_task_id": request.agent_task_id, "assigned_to": assigned_to, "signing_key_id": verified_key_id}
             )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
-    try:
-        task_id = uuid.uuid4().hex[:8]
-        db.execute(
-            "INSERT INTO wbd_tasks (id, agent_task_id, payload, status, created_at, domain_hint) VALUES (?, ?, ?, 'open', ?, ?)",
-            (task_id, request.agent_task_id, encrypt_data(request.payload), datetime.utcnow().isoformat(), request.domain_hint)
-        )
-        db.commit()
-
-        # Auto-route to an authority
-        assigned_to = _route_wbd_task(db, request.domain_hint, request.agent_task_id)
-        if assigned_to:
-            db.execute(
-                "UPDATE wbd_tasks SET assigned_to = ?, notified_at = ? WHERE id = ?",
-                (assigned_to, datetime.utcnow().isoformat(), task_id),
+            logger.info(
+                f"WBD task submitted: id={task_id} agent_task_id={request.agent_task_id} "
+                f"signed_by={verified_key_id} assigned={assigned_to}"
             )
-            db.commit()
-            # Fire notification
-            notification_config = _get_notification_config(db, assigned_to)
-            _fire_notification(assigned_to, notification_config, task_id, request.agent_task_id, request.domain_hint)
-
-        # Log the WBD task submission to audit (actor = signing key)
-        write_audit_log(
-            db,
-            actor=f"agent:{verified_key_id}",
-            event_type="wbd_submit",
-            payload={"task_id": task_id},
-            details={"agent_task_id": request.agent_task_id, "assigned_to": assigned_to, "signing_key_id": verified_key_id}
-        )
-
-        logger.info(
-            f"WBD task submitted: id={task_id} agent_task_id={request.agent_task_id} "
-            f"signed_by={verified_key_id} assigned={assigned_to}"
-        )
-        return {
-            "status": "success",
-            "task_id": task_id,
-            "assigned_to": assigned_to,
-            "message": "WBD task submitted successfully",
-            "details": {
-                "agent_task_id": request.agent_task_id,
-                "payload": request.payload,
-                "status": "open",
+            return {
+                "status": "success",
+                "task_id": task_id,
                 "assigned_to": assigned_to,
-                "created_at": datetime.utcnow().isoformat(),
-                "signed_by": verified_key_id,
-            },
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Error submitting WBD task")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+                "message": "WBD task submitted successfully",
+                "details": {
+                    "agent_task_id": request.agent_task_id,
+                    "payload": request.payload,
+                    "status": "open",
+                    "assigned_to": assigned_to,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "signed_by": verified_key_id,
+                },
+            }
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Error submitting WBD task")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 @wa_router.get("/tasks", response_model=dict)
-def get_wbd_tasks(
+async def get_wbd_tasks(
     state: Optional[str] = None,
     since: Optional[str] = None,
-    db: sqlite3.Connection = Depends(get_db),
     role: str = Depends(get_current_role),
     Authorization: str = Header(default=""),
 ):
     """List WBD tasks with optional filters. Authorities see only their assigned or unassigned tasks."""
     try:
-        # Check for SLA breaches (24 hours) and auto-escalate
-        sla_threshold = datetime.utcnow().isoformat()
-        sla_threshold_dt = datetime.fromisoformat(sla_threshold)
-        from datetime import timedelta
-        sla_threshold_dt = sla_threshold_dt - timedelta(hours=24)
-        sla_threshold = sla_threshold_dt.isoformat()
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            # Check for SLA breaches (24 hours) and auto-escalate
+            from datetime import timedelta
+            sla_cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
 
-        open_tasks = db.execute("SELECT id, created_at FROM wbd_tasks WHERE status = 'open' AND created_at < ?", (sla_threshold,)).fetchall()
-        for task in open_tasks:
-            task_id = task[0]
-            db.execute("UPDATE wbd_tasks SET status = 'sla_breached' WHERE id = ?", (task_id,))
-            write_audit_log(
-                db,
-                actor="system",
-                event_type="wbd_sla_breach",
-                payload={"task_id": task_id},
-                details={"reason": "SLA breach (24h)"}
-            )
-            logger.info(f"WBD task {task_id} auto-escalated due to SLA breach")
+            open_tasks = await conn.fetch("SELECT id, created_at FROM wbd_tasks WHERE status = 'open' AND created_at < $1", sla_cutoff)
+            for task in open_tasks:
+                task_id = task["id"]
+                await conn.execute("UPDATE wbd_tasks SET status = 'sla_breached' WHERE id = $1", task_id)
+                await write_audit_log(
+                    actor="system",
+                    event_type="wbd_sla_breach",
+                    payload={"task_id": task_id},
+                    details={"reason": "SLA breach (24h)"}
+                )
+                logger.info(f"WBD task {task_id} auto-escalated due to SLA breach")
 
-        db.commit()
+            # Build query with filters
+            query = "SELECT id, agent_task_id, payload, status, created_at, assigned_to, domain_hint, notified_at FROM wbd_tasks WHERE 1=1"
+            params: list = []
+            param_idx = 1
 
-        # Build query with filters
-        query = "SELECT id, agent_task_id, payload, status, created_at, assigned_to, domain_hint, notified_at FROM wbd_tasks WHERE 1=1"
-        params: list = []
+            # Role-based filtering: authorities see only assigned-to-them or unassigned
+            if role == "wise_authority":
+                actor = get_actor_from_token(Authorization)
+                query += f" AND (assigned_to = ${param_idx} OR assigned_to IS NULL)"
+                params.append(actor)
+                param_idx += 1
 
-        # Role-based filtering: authorities see only assigned-to-them or unassigned
-        if role == "wise_authority":
-            actor = get_actor_from_token(Authorization)
-            query += " AND (assigned_to = ? OR assigned_to IS NULL)"
-            params.append(actor)
+            if state:
+                query += f" AND status = ${param_idx}"
+                params.append(state)
+                param_idx += 1
+            if since:
+                query += f" AND created_at >= ${param_idx}"
+                params.append(since)
+                param_idx += 1
 
-        if state:
-            query += " AND status = ?"
-            params.append(state)
-        if since:
-            query += " AND created_at >= ?"
-            params.append(since)
+            rows = await conn.fetch(query, *params)
 
-        rows = db.execute(query, params).fetchall()
         logger.info(f"Retrieved {len(rows)} WBD tasks with filters state={state}, since={since}")
         tasks = []
         for task in rows:
             try:
-                payload = decrypt_data(task[2]) if task[2] else ""
+                payload = decrypt_data(task["payload"]) if task["payload"] else ""
             except Exception:
-                payload = task[2] or ""
+                payload = task["payload"] or ""
             tasks.append({
-                "id": task[0],
-                "agent_task_id": task[1],
+                "id": task["id"],
+                "agent_task_id": task["agent_task_id"],
                 "payload": payload,
-                "status": task[3],
-                "created_at": task[4],
-                "assigned_to": task[5],
-                "domain_hint": task[6],
-                "notified_at": task[7],
+                "status": task["status"],
+                "created_at": str(task["created_at"]),
+                "assigned_to": task["assigned_to"],
+                "domain_hint": task["domain_hint"],
+                "notified_at": str(task["notified_at"]) if task["notified_at"] else None,
             })
         return {"tasks": tasks}
-    except Exception as e:
+    except Exception:
         logger.exception("Error retrieving WBD tasks")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 @wa_router.get("/tasks/{task_id}", response_model=dict)
-def get_wbd_task(task_id: str, db: sqlite3.Connection = Depends(get_db)):
+async def get_wbd_task(task_id: str):
     """Get a single WBD task by ID. Used by agents to poll resolution status."""
     try:
-        row = db.execute(
-            "SELECT id, agent_task_id, payload, status, created_at, decision, comment, assigned_to, domain_hint, notified_at FROM wbd_tasks WHERE id = ?",
-            (task_id,)
-        ).fetchone()
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, agent_task_id, payload, status, created_at, decision, comment, assigned_to, domain_hint, notified_at FROM wbd_tasks WHERE id = $1",
+                task_id
+            )
         if not row:
             raise HTTPException(status_code=404, detail=f"WBD task {task_id} not found")
 
         try:
-            payload = decrypt_data(row[2]) if row[2] else ""
+            payload = decrypt_data(row["payload"]) if row["payload"] else ""
         except Exception:
-            payload = row[2] or ""
+            payload = row["payload"] or ""
 
         return {
             "task": {
-                "id": row[0],
-                "agent_task_id": row[1],
+                "id": row["id"],
+                "agent_task_id": row["agent_task_id"],
                 "payload": payload,
-                "status": row[3],
-                "created_at": row[4],
-                "decision": row[5],
-                "comment": row[6],
-                "assigned_to": row[7],
-                "domain_hint": row[8],
-                "notified_at": row[9],
+                "status": row["status"],
+                "created_at": str(row["created_at"]),
+                "decision": row["decision"],
+                "comment": row["comment"],
+                "assigned_to": row["assigned_to"],
+                "domain_hint": row["domain_hint"],
+                "notified_at": str(row["notified_at"]) if row["notified_at"] else None,
             }
         }
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Error retrieving WBD task %s", task_id)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -423,31 +408,30 @@ def get_wbd_task(task_id: str, db: sqlite3.Connection = Depends(get_db)):
     dependencies=[Depends(require_role(["admin", "wise_authority"]))],
     response_model=dict,
 )
-def resolve_wbd_task(
+async def resolve_wbd_task(
     task_id: str,
     request: WBDResolveRequest,
     Authorization: str = Header(...),
-    db: sqlite3.Connection = Depends(get_db),
 ):
     """Resolve a WBD task with a decision (approve or reject). Requires admin or wise_authority role."""
     try:
         if request.decision not in ["approve", "reject"]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Decision must be 'approve' or 'reject'")
 
-        task = db.execute("SELECT * FROM wbd_tasks WHERE id = ?", (task_id,)).fetchone()
-        if not task:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"WBD task with ID {task_id} not found")
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            task = await conn.fetchrow("SELECT id FROM wbd_tasks WHERE id = $1", task_id)
+            if not task:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"WBD task with ID {task_id} not found")
 
-        # Extract actual resolver identity from JWT
-        actor = get_actor_from_token(Authorization)
+            # Extract actual resolver identity from JWT
+            actor = get_actor_from_token(Authorization)
 
-        db.execute(
-            "UPDATE wbd_tasks SET status = 'resolved', decision = ?, comment = ? WHERE id = ?",
-            (request.decision, request.comment, task_id)
-        )
-        db.commit()
-        write_audit_log(
-            db,
+            await conn.execute(
+                "UPDATE wbd_tasks SET status = 'resolved', decision = $1, comment = $2 WHERE id = $3",
+                request.decision, request.comment, task_id
+            )
+        await write_audit_log(
             actor=actor,
             event_type="wbd_resolve",
             payload={"task_id": task_id},
@@ -460,12 +444,12 @@ def resolve_wbd_task(
             "details": {
                 "decision": request.decision,
                 "comment": request.comment,
-                "resolved_at": datetime.utcnow().isoformat(),
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
             },
         }
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Error resolving WBD task %s", task_id)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
@@ -475,34 +459,34 @@ def resolve_wbd_task(
     dependencies=[Depends(require_role(["admin"]))],
     response_model=dict,
 )
-def assign_wbd_task(task_id: str, request: WBDAssignRequest, Authorization: str = Header(...), db: sqlite3.Connection = Depends(get_db)):
+async def assign_wbd_task(task_id: str, request: WBDAssignRequest, Authorization: str = Header(...)):
     """Reassign a WBD task to a specific authority. Admin-only."""
-    task = db.execute("SELECT id, agent_task_id, domain_hint FROM wbd_tasks WHERE id = ?", (task_id,)).fetchone()
-    if not task:
-        raise HTTPException(status_code=404, detail=f"WBD task {task_id} not found")
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        task = await conn.fetchrow("SELECT id, agent_task_id, domain_hint FROM wbd_tasks WHERE id = $1", task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"WBD task {task_id} not found")
 
-    # Verify target user exists and has authority role
-    user = db.execute(
-        "SELECT id, username, role FROM users WHERE username = ?", (request.assigned_to,)
-    ).fetchone()
-    if not user:
-        raise HTTPException(status_code=404, detail=f"User {request.assigned_to} not found")
-    if user[2] not in ("wise_authority", "admin"):
-        raise HTTPException(status_code=400, detail=f"User {request.assigned_to} is not an authority or admin")
+        # Verify target user exists and has authority role
+        user = await conn.fetchrow(
+            "SELECT id, username, role FROM users WHERE username = $1", request.assigned_to
+        )
+        if not user:
+            raise HTTPException(status_code=404, detail=f"User {request.assigned_to} not found")
+        if user["role"] not in ("wise_authority", "admin"):
+            raise HTTPException(status_code=400, detail=f"User {request.assigned_to} is not an authority or admin")
 
-    db.execute(
-        "UPDATE wbd_tasks SET assigned_to = ?, notified_at = ? WHERE id = ?",
-        (request.assigned_to, datetime.utcnow().isoformat(), task_id),
-    )
-    db.commit()
+        await conn.execute(
+            "UPDATE wbd_tasks SET assigned_to = $1, notified_at = $2 WHERE id = $3",
+            request.assigned_to, datetime.now(timezone.utc).isoformat(), task_id,
+        )
 
-    # Fire notification to new assignee
-    notification_config = _get_notification_config(db, request.assigned_to)
-    _fire_notification(request.assigned_to, notification_config, task_id, task[1], task[2])
+        # Fire notification to new assignee
+        notification_config = await _get_notification_config(conn, request.assigned_to)
+        _fire_notification(request.assigned_to, notification_config, task_id, task["agent_task_id"], task["domain_hint"])
 
     actor = get_actor_from_token(Authorization)
-    write_audit_log(
-        db,
+    await write_audit_log(
         actor=actor,
         event_type="wbd_reassign",
         payload={"task_id": task_id},
@@ -513,7 +497,7 @@ def assign_wbd_task(task_id: str, request: WBDAssignRequest, Authorization: str 
 
 
 @wa_router.post("/deferral")
-def deferral(request: DeferralRequest, db: sqlite3.Connection = Depends(get_db)):
+async def deferral(request: DeferralRequest):
     """Legacy deferral endpoint — forwards to WBD submit."""
     submit_request = WBDSubmitRequest(
         agent_task_id=request.target_object or "unknown",
@@ -522,7 +506,7 @@ def deferral(request: DeferralRequest, db: sqlite3.Connection = Depends(get_db))
         signature=request.signature,
         signature_key_id=request.signature_key_id,
     )
-    return submit_wbd_task(submit_request, db)
+    return await submit_wbd_task(submit_request)
 
 
 # ============================================================================
@@ -538,9 +522,8 @@ import time as _time_mod
     dependencies=[Depends(require_role(["admin"]))],
     response_model=dict,
 )
-def trigger_covenant_invocation(
+async def trigger_covenant_invocation(
     cis_request: CISRequest,
-    db: sqlite3.Connection = Depends(get_db),
     Authorization: str = Header(...),
 ):
     """
@@ -590,13 +573,15 @@ def trigger_covenant_invocation(
     signature_hex = sign_covenant_invocation(payload_dict, wa_key)
 
     # Record in DB for audit trail
-    try:
-        db.execute(
-            """INSERT INTO covenant_invocations
-               (id, target_agent_id, directive, reason, incident_id,
-                authority_wa_id, issued_by, signature, delivered, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
-            (
+    pool = await get_pg_pool()
+    delivered = False
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                """INSERT INTO covenant_invocations
+                   (id, target_agent_id, directive, reason, incident_id,
+                    authority_wa_id, issued_by, signature, delivered, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9)""",
                 invocation_id,
                 cis_request.target_agent_id,
                 cis_request.directive,
@@ -605,48 +590,40 @@ def trigger_covenant_invocation(
                 wa_key_id,
                 actor,
                 signature_hex,
-                datetime.utcnow().isoformat(),
-            ),
-        )
-        db.commit()
-    except Exception as e:
-        logger.warning(f"Failed to record invocation (table may not exist yet): {e}")
+                datetime.now(timezone.utc).isoformat(),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record invocation (table may not exist yet): {e}")
 
-    # Deliver via agent events channel
-    delivered = False
-    try:
-        event_payload = json.dumps({
-            "event_type": "covenant_invocation",
-            "invocation_id": invocation_id,
-            "payload": payload_dict,
-            "signature": signature_hex,
-            "signing_key_id": wa_key_id,
-        })
-        db.execute(
-            """INSERT INTO agent_events (id, agent_uid, event_type, payload, created_at)
-               VALUES (?, ?, 'covenant_invocation', ?, ?)""",
-            (
+        # Deliver via agent events channel
+        try:
+            event_payload = json.dumps({
+                "event_type": "covenant_invocation",
+                "invocation_id": invocation_id,
+                "payload": payload_dict,
+                "signature": signature_hex,
+                "signing_key_id": wa_key_id,
+            })
+            await conn.execute(
+                """INSERT INTO agent_events (id, agent_uid, event_json, node_ts)
+                   VALUES ($1, $2, $3::jsonb, $4)""",
                 uuid.uuid4().hex,
                 cis_request.target_agent_id,
                 event_payload,
-                datetime.utcnow().isoformat(),
-            ),
-        )
-        db.commit()
-        delivered = True
+                datetime.now(timezone.utc),
+            )
+            delivered = True
 
-        # Mark as delivered
-        db.execute(
-            "UPDATE covenant_invocations SET delivered = 1, delivered_at = ? WHERE id = ?",
-            (datetime.utcnow().isoformat(), invocation_id),
-        )
-        db.commit()
-    except Exception as e:
-        logger.error(f"Failed to deliver covenant invocation: {e}")
+            # Mark as delivered
+            await conn.execute(
+                "UPDATE covenant_invocations SET delivered = TRUE, delivered_at = $1 WHERE id = $2",
+                datetime.now(timezone.utc).isoformat(), invocation_id,
+            )
+        except Exception as e:
+            logger.error(f"Failed to deliver covenant invocation: {e}")
 
     # Audit log
-    write_audit_log(
-        db,
+    await write_audit_log(
         actor=actor,
         event_type="covenant_invocation",
         payload={"invocation_id": invocation_id},

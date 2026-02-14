@@ -6,10 +6,8 @@ streaming progress via SSE to connected purple agents.
 """
 
 import asyncio
-import json
 import logging
 import time
-from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 from cirisnode.config import settings
@@ -193,7 +191,7 @@ async def execute_evaluation(
                 await store.add_artifact(
                     task_id,
                     TaskArtifact(
-                        name=f"batch_progress",
+                        name="batch_progress",
                         index=batch_idx,
                         parts=[
                             {

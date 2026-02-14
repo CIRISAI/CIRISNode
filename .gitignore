@@ -22,8 +22,12 @@ var/
 
 # Virtual Environment
 venv/
+.venv/
 env/
 ENV/
+
+# Node
+node_modules/
 
 # IDE files
 .idea/

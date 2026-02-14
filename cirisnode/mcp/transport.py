@@ -8,7 +8,6 @@ providing both HTTP and SSE transport for remote MCP clients.
 import logging
 
 from starlette.applications import Starlette
-from starlette.routing import Mount
 
 from cirisnode.mcp.server import mcp
 

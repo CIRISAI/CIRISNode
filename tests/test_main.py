@@ -1,9 +1,4 @@
-from fastapi.testclient import TestClient
-from cirisnode.main import app
-
-client = TestClient(app)
-
-def test_health_check():
+def test_health_check(client):
     response = client.get("/api/v1/health")
     assert response.status_code == 200
     data = response.json()

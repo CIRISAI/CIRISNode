@@ -13,11 +13,11 @@ Subscription tiers (defined in Portal API):
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-from cirisnode.api.agentbeats.portal_client import StandingResult, get_portal_client
+from cirisnode.services.portal_client import get_portal_client
 from cirisnode.db.pg_pool import get_pg_pool
 
 logger = logging.getLogger(__name__)

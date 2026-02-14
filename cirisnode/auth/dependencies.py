@@ -11,7 +11,7 @@ import jwt
 from fastapi import Depends, Header, HTTPException, status
 
 from cirisnode.config import settings
-from cirisnode.database import get_db
+from cirisnode.db.pg_pool import get_pg_pool
 
 logger = logging.getLogger(__name__)
 
@@ -121,22 +121,17 @@ def require_role(allowed_roles: list):
     return checker
 
 
-def _get_conn(db):
-    """Unwrap the DB dependency to a connection."""
-    return next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
-
-
-def require_agent_token(
+async def require_agent_token(
     x_agent_token: str = Header(..., alias="x-agent-token"),
-    db=Depends(get_db),
 ) -> str:
     """Validate agent token from X-Agent-Token header. Returns token as actor."""
-    conn = _get_conn(db)
-    token_row = conn.execute(
-        "SELECT token, owner FROM agent_tokens WHERE token = ?",
-        (x_agent_token,),
-    ).fetchone()
-    if not token_row:
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT token, owner FROM agent_tokens WHERE token = $1",
+            x_agent_token,
+        )
+    if not row:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid agent token",
@@ -147,7 +142,6 @@ def require_agent_token(
 async def require_auth(
     authorization: Optional[str] = Header(None, alias="Authorization"),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
-    db=Depends(get_db),
 ) -> str:
     """Validate JWT Bearer token or API key. Returns actor identifier.
 
@@ -169,14 +163,14 @@ async def require_auth(
 
     # Try API key
     if x_api_key:
-        import sqlite3
-        conn = db if isinstance(db, sqlite3.Connection) else next(db)
-        row = conn.execute(
-            "SELECT owner FROM agent_tokens WHERE token = ?",
-            (x_api_key,),
-        ).fetchone()
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT owner FROM agent_tokens WHERE token = $1",
+                x_api_key,
+            )
         if row:
-            return row[0] if row[0] else "agent"
+            return row["owner"] or "agent"
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -187,10 +181,9 @@ async def require_auth(
 async def optional_auth(
     authorization: Optional[str] = Header(None, alias="Authorization"),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
-    db=Depends(get_db),
 ) -> Optional[str]:
     """Like require_auth, but returns None instead of raising 401."""
     try:
-        return await require_auth(authorization, x_api_key, db)
+        return await require_auth(authorization, x_api_key)
     except HTTPException:
         return None

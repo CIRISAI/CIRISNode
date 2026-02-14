@@ -1,13 +1,7 @@
 """Tests for JWT-protected endpoint access."""
 
-import pytest
-from fastapi.testclient import TestClient
-from cirisnode.main import app
 
-client = TestClient(app)
-
-
-def test_invalid_bearer_token_rejected():
+def test_invalid_bearer_token_rejected(client):
     """A bogus Bearer token should get 401 from the benchmarks endpoint."""
     response = client.post(
         "/api/v1/benchmarks/run",
@@ -17,7 +11,7 @@ def test_invalid_bearer_token_rejected():
     assert response.status_code == 401
 
 
-def test_missing_auth_rejected():
+def test_missing_auth_rejected(client):
     """No auth header at all should also be rejected."""
     response = client.post(
         "/api/v1/benchmarks/run",

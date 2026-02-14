@@ -7,7 +7,7 @@ Benchmark execution gateway + evaluation read APIs. **NO finance/billing logic.*
 ## Tech Stack
 
 - **Language**: Python 3.12, FastAPI, asyncpg
-- **Database**: PostgreSQL (evaluations, tenant_tiers, agent_profiles)
+- **Database**: PostgreSQL only (via asyncpg pool)
 - **Queue**: Redis + Celery for async benchmark execution
 - **Auth**: JWT (HS256) — `JWT_SECRET` env var
 - **Deployment**: Docker → GHCR → Watchtower auto-deploy (see CI/CD section)
@@ -16,13 +16,12 @@ Benchmark execution gateway + evaluation read APIs. **NO finance/billing logic.*
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| **agentbeats** | `cirisnode/api/agentbeats/` | Benchmark execution + quota enforcement |
-| **portal_client** | `cirisnode/api/agentbeats/portal_client.py` | Portal API client for standing checks (60s cache) |
-| **quota** | `cirisnode/api/agentbeats/quota.py` | Quota check — calls Portal API + counts local evals |
+| **portal_client** | `cirisnode/services/portal_client.py` | Portal API client for standing checks (60s cache) |
+| **quota** | `cirisnode/services/quota.py` | Quota check — calls Portal API + counts local evals |
 | **evaluations** | `cirisnode/api/evaluations/` | Evaluation read, delete, report, usage endpoints |
 | **scores** | `cirisnode/api/scores/` | Public scores (aggregate: min 5 evals/model, trends at 10) |
 | **billing** | `cirisnode/api/billing/` | Plan display + billing proxy to Portal API |
-| **admin** | `cirisnode/api/admin/` | DEPRECATED tier writes + authority profile CRUD + frontier sweep |
+| **admin** | `cirisnode/api/admin/` | Authority profile CRUD + frontier sweep (tenant tier management removed) |
 | **wa/wbd** | `cirisnode/api/wa/`, `cirisnode/api/wbd/` | WBD task submission, routing, resolution |
 | **notifications** | `cirisnode/services/notifications.py` | Email + Discord + in-app notification dispatcher |
 
@@ -42,11 +41,11 @@ CIRISNode counts local evals in window (evaluations table)
 CIRISNode compares count vs limit → allow/deny
 ```
 
-- **PortalClient** (`portal_client.py`): Async httpx client, service JWT auth, 60s cache
-- **check_quota()**: Calls PortalClient, counts local evals, raises QuotaDenied
+- **PortalClient** (`cirisnode/services/portal_client.py`): Async httpx client, service JWT auth, 60s cache
+- **check_quota()** (`cirisnode/services/quota.py`): Calls PortalClient, counts local evals, raises QuotaDenied
 - **count_evals_in_window()**: SQL count on evaluations table
 - If Portal API unreachable: returns standing="degraded", benchmark denied (503)
-- `tenant_tiers` table is no longer read by quota.py (DEPRECATED)
+- `tenant_tiers` table removed (Portal API is source of truth for tier/standing)
 
 ## Auth & RBAC (3-Tier)
 
@@ -97,20 +96,22 @@ Configured per-authority via `notification_config` JSON:
 
 ## Database
 
-### PostgreSQL (async, via asyncpg pool)
-- `evaluations` — benchmark results (read path, written by Celery workers)
-- `tenant_tiers` — DEPRECATED: tier per tenant (no longer read by quota.py)
-- `agent_profiles` — agent registration data
-- `authority_profiles` — expertise, availability, notification config for wise authorities
+All tables in a single PostgreSQL database (async, via asyncpg pool). Migrations auto-run at startup via `cirisnode/db/migrator.py`.
 
-### SQLite (sync, via cirisnode/database.py)
+### Tables
+
+- `evaluations` — benchmark results (written by Celery workers)
+- `frontier_models` — display metadata for frontier sweep scores
+- `agent_profiles` — agent registration data
 - `users` — username, role, OAuth data
 - `wbd_tasks` — WBD task queue with routing fields (assigned_to, domain_hint)
+- `authority_profiles` — expertise, availability, notification config for wise authorities
 - `audit_logs` — immutable audit trail
 - `agent_tokens`, `agent_events`, `config`, `jobs`
+- `covenant_public_keys`, `covenant_traces`, `covenant_invocations`
 
-PostgreSQL migrations auto-run at startup via `cirisnode/db/migrator.py`.
-SQLite schema auto-migrates new columns on first connection via `cirisnode/database.py`.
+### Note: `tenant_tiers` table removed
+Tier/standing decisions now come exclusively from Portal API (`GET /api/v1/standing/{actor}`).
 
 ## Integrations
 
@@ -261,8 +262,9 @@ Located at `ui/`. Role-aware dashboard with page-level access control.
 
 ## Testing
 
+Requires a PostgreSQL test database:
 ```bash
-.venv/bin/python -m pytest tests/ -v
+DATABASE_URL=postgresql://localhost/cirisnode_test .venv/bin/python -m pytest tests/ -v
 ```
 
 ## CI/CD
@@ -287,7 +289,7 @@ Continuous deployment pipeline: push to `main` → Docker build → auto-deploy 
 
 ### Docker
 
-- `Dockerfile`: Python 3.10-slim, installs requirements, runs `init_db.py` then uvicorn on port 8000
+- `Dockerfile`: Python 3.10-slim, installs requirements, runs uvicorn on port 8000
 - `docker-compose.yml`: Full stack (api, celery worker, postgres, redis, admin UI) — used for local/reference, prod uses individual containers
 
 ### Rollback
@@ -374,3 +376,29 @@ CIRISNode  <-- YOU ARE HERE  ethicsengine-portal-api
 PostgreSQL                     |      (system of
                                |       record)
 ```
+
+## Deployment Notes (2026-02-14)
+
+**SQLite fully removed.** CIRISNode previously used SQLite for auth/agent/WBD tables and PostgreSQL for benchmarking. As of this release, all tables are in PostgreSQL via asyncpg. Key changes:
+
+- **New migration `001_ensure_core_tables.sql`** runs automatically at startup (via `migrator.py`). Uses `CREATE TABLE IF NOT EXISTS` — safe on existing databases.
+- **`database.py` and `init_db.py` deleted** — no more SQLite connection manager or schema init.
+- **Dockerfile simplified** — no longer runs `init_db.py` before uvicorn.
+- **All route files** converted from sync SQLite (`?` params, `.fetchone()`, `Depends(get_db)`) to async asyncpg (`$N` params, `await conn.fetchrow()`, `await get_pg_pool()`).
+- **Dead code removed** — `agentbeats/`, `Veilid_*`, unused schemas, duplicate utils (~2500 lines deleted).
+- **Tests require PostgreSQL** — `DATABASE_URL=postgresql://localhost/cirisnode_test`
+
+No API contract changes. All endpoints return the same shapes. Frontend services (ethicsengine-site, ethicsengine-portal, ethicsengine-portal-api) are unaffected.
+
+## Domain Separation
+
+CIRISNode has two independent logical domains, all in PostgreSQL:
+
+| Domain | Router Files | Key Tables |
+|--------|-------------|------------|
+| **Wise Authority** | `api/wa/`, `api/wbd/`, `api/admin/authority_routes.py` | `wbd_tasks`, `authority_profiles`, `covenant_public_keys` |
+| **Benchmarking** | `api/benchmarks/`, `api/evaluations/`, `api/scores/`, `api/admin/frontier_routes.py` | `evaluations`, `frontier_models`, `agent_profiles` |
+| **Agent Infra** | `api/agent/`, `api/covenant/` | `agent_events`, `covenant_public_keys`, `covenant_traces` |
+| **Shared** | `auth/`, `api/auth/`, `api/audit/`, `api/config/`, `api/health/` | `users`, `audit_logs` |
+
+No cross-domain data dependencies exist between WA and Benchmarking. Auth module (`cirisnode/auth/`) is the single source of truth for all JWT/role/agent-token validation.

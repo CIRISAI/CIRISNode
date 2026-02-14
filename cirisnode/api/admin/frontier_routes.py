@@ -40,8 +40,8 @@ from cirisnode.benchmark.runner import BENCHMARK_SYSTEM_PROMPT, SemanticEvalConf
 from cirisnode.config import settings
 from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.utils.log_buffer import get_log_buffer
-from cirisnode.utils.rbac import require_role
-from cirisnode.utils.redis_cache import cache_set, get_redis
+from cirisnode.auth.dependencies import require_role
+from cirisnode.utils.redis_cache import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -764,7 +764,7 @@ async def stream_sweep_progress(sweep_id: str):
                     yield f"event: done\ndata: {data}\n\n"
                     break
             except HTTPException:
-                yield f"event: error\ndata: {{\"error\": \"Sweep not found\"}}\n\n"
+                yield "event: error\ndata: {\"error\": \"Sweep not found\"}\n\n"
                 break
             except Exception as exc:
                 logger.exception("[SSE] Error streaming sweep %s", sweep_id)

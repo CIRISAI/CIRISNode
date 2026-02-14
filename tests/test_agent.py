@@ -1,25 +1,31 @@
-from fastapi.testclient import TestClient
-from cirisnode.main import app
-from cirisnode.database import DATABASE_PATH
+"""Tests for CIRISNode agent event endpoints."""
+
+import os
+import asyncio
+import asyncpg
 import jwt
-import sqlite3
-
-client = TestClient(app)
-
-# Helper for generating a static JWT for test purposes
 from cirisnode.config import settings
+
 TEST_AGENT_TOKEN = "test-agent-token-abc123"
 
 
 def _ensure_agent_token():
-    """Insert a test agent token into the DB if not present."""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.execute(
-        "INSERT OR IGNORE INTO agent_tokens (token, owner) VALUES (?, ?)",
-        (TEST_AGENT_TOKEN, "test-agent"),
-    )
-    conn.commit()
-    conn.close()
+    """Insert a test agent token into PostgreSQL if not present."""
+    db_url = os.environ.get("DATABASE_URL", "postgresql://localhost/cirisnode_test")
+
+    async def _seed():
+        conn = await asyncpg.connect(db_url)
+        try:
+            await conn.execute(
+                "INSERT INTO agent_tokens (token, owner) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                TEST_AGENT_TOKEN, "test-agent",
+            )
+        finally:
+            await conn.close()
+
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(_seed())
+    loop.close()
 
 
 def get_admin_header():
@@ -32,7 +38,7 @@ def get_agent_header():
     return {"X-Agent-Token": TEST_AGENT_TOKEN}
 
 
-def test_push_agent_event():
+def test_push_agent_event(client):
     headers = get_agent_header()
     response = client.post(
         "/api/v1/agent/events",
@@ -46,7 +52,7 @@ def test_push_agent_event():
     assert "content_hash" in data
 
 
-def test_push_agent_event_no_token():
+def test_push_agent_event_no_token(client):
     """POST without agent token should be rejected."""
     response = client.post(
         "/api/v1/agent/events",
@@ -55,7 +61,7 @@ def test_push_agent_event_no_token():
     assert response.status_code in (401, 422)
 
 
-def test_push_agent_event_invalid_token():
+def test_push_agent_event_invalid_token(client):
     """POST with invalid agent token should be 401."""
     response = client.post(
         "/api/v1/agent/events",
@@ -65,7 +71,7 @@ def test_push_agent_event_invalid_token():
     assert response.status_code == 401
 
 
-def test_get_agent_events():
+def test_get_agent_events(client):
     headers = get_agent_header()
     # Create one first
     client.post(
@@ -81,28 +87,26 @@ def test_get_agent_events():
     assert "content_hash" in data[0]
 
 
-def test_get_agent_events_no_token():
+def test_get_agent_events_no_token(client):
     """GET without token should be rejected."""
     response = client.get("/api/v1/agent/events")
     assert response.status_code in (401, 422)
 
 
-def test_delete_agent_event_requires_admin():
+def test_delete_agent_event_requires_admin(client):
     """DELETE without admin JWT should be rejected."""
     agent_headers = get_agent_header()
-    # Create an event
     resp = client.post(
         "/api/v1/agent/events",
         json={"agent_uid": "agent_789", "event": {"type": "Task", "data": "to delete"}},
         headers=agent_headers,
     )
     event_id = resp.json()["id"]
-    # Try delete without auth — should fail
     response = client.delete(f"/api/v1/agent/events/{event_id}")
     assert response.status_code in (401, 422)
 
 
-def test_delete_agent_event_admin():
+def test_delete_agent_event_admin(client):
     """DELETE with admin JWT should soft-delete and return content hash."""
     agent_headers = get_agent_header()
     resp = client.post(
@@ -119,7 +123,7 @@ def test_delete_agent_event_admin():
     assert "original_content_hash" in data
 
 
-def test_archive_agent_event_requires_admin():
+def test_archive_agent_event_requires_admin(client):
     """PATCH archive without admin JWT should be rejected."""
     agent_headers = get_agent_header()
     resp = client.post(
@@ -134,7 +138,7 @@ def test_archive_agent_event_requires_admin():
     assert response.status_code in (401, 422)
 
 
-def test_archive_agent_event_admin():
+def test_archive_agent_event_admin(client):
     """PATCH archive with admin JWT should succeed and return content hash."""
     agent_headers = get_agent_header()
     resp = client.post(
@@ -154,11 +158,10 @@ def test_archive_agent_event_admin():
     assert "original_content_hash" in data
 
 
-def test_soft_deleted_events_hidden():
+def test_soft_deleted_events_hidden(client):
     """Soft-deleted events should not appear in GET listing."""
     agent_headers = get_agent_header()
     admin_headers = get_admin_header()
-    # Create and soft-delete
     resp = client.post(
         "/api/v1/agent/events",
         json={"agent_uid": "agent_789", "event": {"type": "Task", "data": "hidden test"}},
@@ -166,7 +169,6 @@ def test_soft_deleted_events_hidden():
     )
     event_id = resp.json()["id"]
     client.delete(f"/api/v1/agent/events/{event_id}", headers=admin_headers)
-    # List events — soft-deleted should not appear
     response = client.get("/api/v1/agent/events", headers=agent_headers)
     ids = [e["id"] for e in response.json()]
     assert event_id not in ids

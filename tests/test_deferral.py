@@ -2,10 +2,6 @@ import pytest
 from fastapi.testclient import TestClient
 from cirisnode.main import app
 
-@pytest.fixture
-def client():
-    """Create a TestClient instance with default X-DID header."""
-    return TestClient(app, headers={"X-DID": "did:peer:456"})
 
 def test_deferral_ponder_negative(client):
     """Test WISE DEFERRAL with 'ponder' decision type - unsigned, should be rejected with 403."""
@@ -42,8 +38,7 @@ def test_deferral_defer_positive(client):
 
 def test_deferral_no_did_header(client):
     """Test WISE DEFERRAL without X-DID header - unsigned, should be rejected."""
-    client_no_did = TestClient(app)
-    response = client_no_did.post("/api/v1/wa/deferral", json={
+    response = client.post("/api/v1/wa/deferral", json={
         "deferral_type": "ponder",
         "reason": "Need more time to think"
     })

@@ -4,8 +4,7 @@ Tests for HE-300 Celery tasks.
 These tests verify the async task processing for HE-300 benchmarks.
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-import json
+from unittest.mock import AsyncMock, MagicMock
 
 
 class TestCeleryTaskImports:

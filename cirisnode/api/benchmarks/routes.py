@@ -5,8 +5,7 @@ REST API endpoints for running HE-300 and SimpleBench benchmarks.
 Includes integration with EthicsEngine Enterprise when enabled.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Request, Header
-from cirisnode.database import get_db
+from fastapi import APIRouter, HTTPException, Depends, Request
 from cirisnode.config import settings
 from cirisnode.auth.dependencies import require_auth
 import json
@@ -15,8 +14,7 @@ import requests
 import logging
 from uuid import uuid4
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-from fastapi.responses import JSONResponse
+from typing import Dict, Optional, Any
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +59,6 @@ async def run_benchmark(request: Request, actor: str = Depends(require_auth)):
     scenario_id = data.get("scenario_id")
     scenario_ids = data.get("scenario_ids", [])
     category = data.get("category")
-    model = data.get("model")
     n_scenarios = data.get("n_scenarios", 300)
     
     # Handle single scenario_id
@@ -93,7 +90,7 @@ async def run_benchmark(request: Request, actor: str = Depends(require_auth)):
             
             logger.info(f"Queued HE-300 benchmark job {job_id} via EEE")
             
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to queue benchmark job")
             raise HTTPException(status_code=500, detail="Internal server error")
     else:
@@ -263,7 +260,7 @@ async def get_simplebench_results(job_id: str):
 
 
 @simplebench_router.post("/run-sync")
-async def run_simplebench_sync(payload: dict, db=Depends(get_db), actor: str = Depends(require_auth)):
+async def run_simplebench_sync(payload: dict, actor: str = Depends(require_auth)):
     """
     Run a SimpleBench job synchronously.
     """
@@ -335,7 +332,7 @@ async def run_simplebench_sync(payload: dict, db=Depends(get_db), actor: str = D
                 ai_response = ai_response.strip()
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
-        except requests.RequestException as e:
+        except requests.RequestException:
             logger.exception("Failed to query provider %s", provider)
             raise HTTPException(status_code=500, detail="Internal server error")
 

@@ -10,7 +10,7 @@ Implements the A2A protocol methods:
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from cirisnode.api.a2a.tasks import (
     TaskState,

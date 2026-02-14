@@ -11,7 +11,6 @@ import argparse
 import asyncio
 import json
 import logging
-import sys
 
 from tests.purple_agent.client import PurpleAgentClient
 
@@ -94,7 +93,7 @@ async def main(args):
                                 logger.info(f"Full report saved to {args.output}")
                             return
 
-            logger.info(f"Task completed but no report artifact found")
+            logger.info("Task completed but no report artifact found")
             logger.info(json.dumps(result, indent=2, default=str))
 
         elif state == "failed":

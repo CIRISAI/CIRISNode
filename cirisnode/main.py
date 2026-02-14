@@ -1,31 +1,43 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from cirisnode.api.audit.routes import audit_router
-from cirisnode.api.benchmarks.routes import simplebench_router, benchmarks_router
-from cirisnode.api.ollama.routes import ollama_router
-from cirisnode.api.wbd.routes import wbd_router
-from cirisnode.api.llm.routes import llm_router
+
+# ── Shared Infrastructure ──
 from cirisnode.api.health.routes import router as health_router
-from cirisnode.api.agent.routes import agent_router
 from cirisnode.api.auth.routes import auth_router
-from cirisnode.api.wa.routes import wa_router
 from cirisnode.api.config.routes import config_router
+from cirisnode.api.audit.routes import audit_router
+
+# ── Agent Infrastructure (Ed25519 signatures, events, A2A) ──
+from cirisnode.api.agent.routes import agent_router
+from cirisnode.api.covenant.routes import covenant_router
 from cirisnode.api.a2a.routes import a2a_router, agent_card_router
+
+# ── Wise Authority (WBD task submission, resolution, authority mgmt) ──
+from cirisnode.api.wa.routes import wa_router
+from cirisnode.api.wbd.routes import wbd_router
+from cirisnode.api.admin.authority_routes import authority_router
+
+# ── Benchmarking (eval execution, scores, leaderboard, frontier sweep) ──
+from cirisnode.api.benchmarks.routes import simplebench_router, benchmarks_router
 from cirisnode.api.scores.routes import scores_router
 from cirisnode.api.evaluations.routes import evaluations_router, usage_router
-from cirisnode.api.covenant.routes import covenant_router
-from cirisnode.api.agentbeats.routes import agentbeats_router
-from cirisnode.api.agentbeats.profiles import profiles_router
-from cirisnode.api.billing.routes import billing_router
-from cirisnode.api.admin.routes import admin_router
 from cirisnode.api.admin.frontier_routes import frontier_router
-from cirisnode.api.admin.authority_routes import authority_router
+
+# ── Billing (proxy to Portal API) ──
+from cirisnode.api.billing.routes import billing_router
+
+# ── LLM/Ollama (test endpoints) ──
+from cirisnode.api.ollama.routes import ollama_router
+from cirisnode.api.llm.routes import llm_router
+
+# ── MCP Server ──
 from cirisnode.mcp.transport import mcp_app
+
 from cirisnode.utils.log_buffer import install_log_buffer
-import os
 
 # Install ring buffer log handler before anything else logs
 install_log_buffer(capacity=2000)
@@ -94,50 +106,37 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 
-# Existing routers
-app.include_router(audit_router)
-app.include_router(simplebench_router)
-app.include_router(ollama_router)
-app.include_router(wbd_router)
-app.include_router(llm_router)
+# ── Shared Infrastructure ──
 app.include_router(health_router)
+app.include_router(auth_router)
+app.include_router(config_router)
+app.include_router(audit_router)
+
+# ── Agent Infrastructure (Ed25519 signatures, events, A2A) ──
 app.include_router(agent_router)
 app.include_router(covenant_router)
-app.include_router(auth_router)
-app.include_router(benchmarks_router)
+app.include_router(agent_card_router)   # /.well-known/agent.json
+app.include_router(a2a_router)          # /a2a JSON-RPC
+
+# ── Wise Authority (WBD task submission, resolution, authority mgmt) ──
 app.include_router(wa_router)
-app.include_router(config_router)
+app.include_router(wbd_router)
+app.include_router(authority_router)    # /api/v1/admin/authorities CRUD
 
-# A2A Protocol endpoints
-app.include_router(agent_card_router)  # /.well-known/agent.json
-app.include_router(a2a_router)          # /a2a
-
-# Unified Evaluation Pipeline — read path
-app.include_router(scores_router)       # /api/v1/scores, /leaderboard, /embed/scores
+# ── Benchmarking (eval execution, scores, leaderboard, frontier sweep) ──
+app.include_router(simplebench_router)
+app.include_router(benchmarks_router)
+app.include_router(scores_router)       # /api/v1/scores, /leaderboard, /embed
 app.include_router(evaluations_router)  # /api/v1/evaluations
 app.include_router(usage_router)        # /api/v1/usage
+app.include_router(frontier_router)     # /api/v1/admin/frontier-models, /sweep
 
-# AgentBeats — benchmark execution + agent profile management
-app.include_router(agentbeats_router)   # /api/v1/agentbeats/run, /status
-app.include_router(profiles_router)     # /api/v1/agent-profiles CRUD
+# ── Billing (proxy to Portal API) ──
+app.include_router(billing_router)
 
-# Billing — Stripe checkout/portal/webhook proxy
-app.include_router(billing_router)     # /api/v1/billing/checkout, /portal, /webhook
+# ── LLM/Ollama (test endpoints) ──
+app.include_router(ollama_router)
+app.include_router(llm_router)
 
-# Admin — tenant tier management (requires admin JWT)
-app.include_router(admin_router)       # /api/v1/admin/tenants/{id}/tier
-app.include_router(frontier_router)    # /api/v1/admin/frontier-models, /frontier-sweep
-app.include_router(authority_router)   # /api/v1/admin/authorities CRUD
-
-# MCP Server (mounted as sub-application)
-app.mount("/mcp", mcp_app)              # /mcp/sse, /mcp/messages/
-
-@app.get("/metrics")
-def metrics():
-    # Placeholder Prometheus metrics
-    return (
-        "cirisnode_up 1\n"
-        "cirisnode_jobs_total 0\n"
-        "cirisnode_wbd_tasks_total 0\n"
-        "cirisnode_audit_logs_total 0\n"
-    )
+# ── MCP Server ──
+app.mount("/mcp", mcp_app)

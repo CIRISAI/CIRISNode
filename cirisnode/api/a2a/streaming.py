@@ -64,7 +64,7 @@ async def task_event_stream(task_id: str) -> AsyncGenerator[str, None]:
 
             except asyncio.TimeoutError:
                 # Send keepalive
-                yield f": keepalive\n\n"
+                yield ": keepalive\n\n"
 
                 # Check if task still exists and isn't terminal
                 task = await task_store.get_task(task_id)

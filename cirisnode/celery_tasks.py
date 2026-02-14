@@ -7,7 +7,6 @@ Includes HE-300 integration with EthicsEngine Enterprise.
 
 import logging
 import asyncio
-import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from uuid import uuid4
@@ -124,8 +123,7 @@ class RunHE300BenchmarkTask(Task):
         
         start_time = datetime.utcnow()
         all_results = []
-        errors = []
-        
+
         try:
             # Step 1: Load or sample scenarios
             if scenario_ids:

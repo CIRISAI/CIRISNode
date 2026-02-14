@@ -7,20 +7,17 @@ Provides:
 - GET  /a2a/tasks/{id}/stream   - SSE streaming
 """
 
-import json
 import logging
-from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from cirisnode.api.a2a.agent_card import build_agent_card
-from cirisnode.api.a2a.auth import validate_a2a_auth
+from cirisnode.auth.dependencies import require_auth as validate_a2a_auth
 from cirisnode.api.a2a.jsonrpc import handle_jsonrpc
 from cirisnode.api.a2a.streaming import task_event_stream
 from cirisnode.api.a2a.tasks import task_store
 from cirisnode.utils.audit import write_audit_log
-from cirisnode.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +47,6 @@ a2a_router = APIRouter(prefix="/a2a", tags=["a2a"])
 async def a2a_rpc(
     request: Request,
     actor: str = Depends(validate_a2a_auth),
-    db=Depends(get_db),
 ):
     """
     A2A JSON-RPC 2.0 endpoint.
@@ -79,9 +75,7 @@ async def a2a_rpc(
     # Audit log
     method = body.get("method", "unknown") if isinstance(body, dict) else "unknown"
     try:
-        conn = db if not hasattr(db, "__next__") else next(db)
-        write_audit_log(
-            conn,
+        await write_audit_log(
             actor=actor,
             event_type=f"a2a_{method.replace('/', '_')}",
             payload={"method": method, "request_id": body.get("id") if isinstance(body, dict) else None},

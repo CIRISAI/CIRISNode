@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from cirisnode.database import get_db
+from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.auth.dependencies import require_role, get_actor_from_token
 from cirisnode.utils.audit import write_audit_log
 import json
@@ -33,34 +33,19 @@ class AuthorityProfileOut(BaseModel):
     updated_at: str
 
 
-def _profile_from_row(user_row, profile_row) -> dict:
-    """Build an authority profile dict from user + profile rows."""
-    return {
-        "id": profile_row[0],
-        "user_id": profile_row[1],
-        "username": user_row[1],
-        "role": user_row[2],
-        "expertise_domains": json.loads(profile_row[2] or "[]"),
-        "assigned_agent_ids": json.loads(profile_row[3] or "[]"),
-        "availability": json.loads(profile_row[4] or "{}"),
-        "notification_config": json.loads(profile_row[5] or "{}"),
-        "created_at": profile_row[6] or "",
-        "updated_at": profile_row[7] or "",
-    }
-
-
 @authority_router.get("", response_model=List[AuthorityProfileOut])
-def list_authorities(db=Depends(get_db)):
+async def list_authorities():
     """List all authority profiles with user info."""
-    conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
-    rows = conn.execute("""
-        SELECT u.id, u.username, u.role,
-               ap.id, ap.user_id, ap.expertise_domains, ap.assigned_agent_ids,
-               ap.availability, ap.notification_config, ap.created_at, ap.updated_at
-        FROM authority_profiles ap
-        JOIN users u ON u.id = ap.user_id
-        ORDER BY u.username
-    """).fetchall()
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT u.id, u.username, u.role,
+                   ap.id, ap.user_id, ap.expertise_domains, ap.assigned_agent_ids,
+                   ap.availability, ap.notification_config, ap.created_at, ap.updated_at
+            FROM authority_profiles ap
+            JOIN users u ON u.id = ap.user_id
+            ORDER BY u.username
+        """)
     result = []
     for r in rows:
         result.append({
@@ -72,24 +57,25 @@ def list_authorities(db=Depends(get_db)):
             "assigned_agent_ids": json.loads(r[6] or "[]"),
             "availability": json.loads(r[7] or "{}"),
             "notification_config": json.loads(r[8] or "{}"),
-            "created_at": r[9] or "",
-            "updated_at": r[10] or "",
+            "created_at": str(r[9] or ""),
+            "updated_at": str(r[10] or ""),
         })
     return result
 
 
 @authority_router.get("/{user_id}", response_model=AuthorityProfileOut)
-def get_authority(user_id: int, db=Depends(get_db)):
+async def get_authority(user_id: int):
     """Get a single authority profile by user_id."""
-    conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
-    row = conn.execute("""
-        SELECT u.id, u.username, u.role,
-               ap.id, ap.user_id, ap.expertise_domains, ap.assigned_agent_ids,
-               ap.availability, ap.notification_config, ap.created_at, ap.updated_at
-        FROM authority_profiles ap
-        JOIN users u ON u.id = ap.user_id
-        WHERE ap.user_id = ?
-    """, (user_id,)).fetchone()
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT u.id, u.username, u.role,
+                   ap.id, ap.user_id, ap.expertise_domains, ap.assigned_agent_ids,
+                   ap.availability, ap.notification_config, ap.created_at, ap.updated_at
+            FROM authority_profiles ap
+            JOIN users u ON u.id = ap.user_id
+            WHERE ap.user_id = $1
+        """, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Authority profile not found")
     return {
@@ -101,68 +87,71 @@ def get_authority(user_id: int, db=Depends(get_db)):
         "assigned_agent_ids": json.loads(row[6] or "[]"),
         "availability": json.loads(row[7] or "{}"),
         "notification_config": json.loads(row[8] or "{}"),
-        "created_at": row[9] or "",
-        "updated_at": row[10] or "",
+        "created_at": str(row[9] or ""),
+        "updated_at": str(row[10] or ""),
     }
 
 
 @authority_router.put("/{user_id}", response_model=AuthorityProfileOut)
-def update_authority(user_id: int, req: AuthorityProfileUpdate, Authorization: str = Header(...), db=Depends(get_db)):
+async def update_authority(user_id: int, req: AuthorityProfileUpdate, Authorization: str = Header(...)):
     """Update an authority profile (expertise, agents, availability, notifications)."""
-    conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
-
-    profile = conn.execute(
-        "SELECT id FROM authority_profiles WHERE user_id = ?", (user_id,)
-    ).fetchone()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Authority profile not found")
-
-    updates = []
-    params = []
-    if req.expertise_domains is not None:
-        updates.append("expertise_domains = ?")
-        params.append(json.dumps(req.expertise_domains))
-    if req.assigned_agent_ids is not None:
-        updates.append("assigned_agent_ids = ?")
-        params.append(json.dumps(req.assigned_agent_ids))
-    if req.availability is not None:
-        updates.append("availability = ?")
-        params.append(json.dumps(req.availability))
-    if req.notification_config is not None:
-        updates.append("notification_config = ?")
-        params.append(json.dumps(req.notification_config))
-
-    if updates:
-        updates.append("updated_at = CURRENT_TIMESTAMP")
-        params.append(user_id)
-        conn.execute(
-            f"UPDATE authority_profiles SET {', '.join(updates)} WHERE user_id = ?",
-            params,
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        profile = await conn.fetchrow(
+            "SELECT id FROM authority_profiles WHERE user_id = $1", user_id
         )
-        conn.commit()
+        if not profile:
+            raise HTTPException(status_code=404, detail="Authority profile not found")
+
+        updates = []
+        params = []
+        param_idx = 1
+        if req.expertise_domains is not None:
+            updates.append(f"expertise_domains = ${param_idx}")
+            params.append(json.dumps(req.expertise_domains))
+            param_idx += 1
+        if req.assigned_agent_ids is not None:
+            updates.append(f"assigned_agent_ids = ${param_idx}")
+            params.append(json.dumps(req.assigned_agent_ids))
+            param_idx += 1
+        if req.availability is not None:
+            updates.append(f"availability = ${param_idx}")
+            params.append(json.dumps(req.availability))
+            param_idx += 1
+        if req.notification_config is not None:
+            updates.append(f"notification_config = ${param_idx}")
+            params.append(json.dumps(req.notification_config))
+            param_idx += 1
+
+        if updates:
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(user_id)
+            await conn.execute(
+                f"UPDATE authority_profiles SET {', '.join(updates)} WHERE user_id = ${param_idx}",
+                *params,
+            )
 
     # Audit
     actor = get_actor_from_token(Authorization)
-    write_audit_log(conn, actor=actor, event_type="authority_profile_update", payload={"user_id": user_id})
+    await write_audit_log(actor=actor, event_type="authority_profile_update", payload={"user_id": user_id})
 
-    return get_authority(user_id, db=iter([conn]))
+    return await get_authority(user_id)
 
 
 @authority_router.delete("/{user_id}")
-def delete_authority(user_id: int, Authorization: str = Header(...), db=Depends(get_db)):
+async def delete_authority(user_id: int, Authorization: str = Header(...)):
     """Remove an authority profile (does not delete the user)."""
-    conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        profile = await conn.fetchrow(
+            "SELECT id FROM authority_profiles WHERE user_id = $1", user_id
+        )
+        if not profile:
+            raise HTTPException(status_code=404, detail="Authority profile not found")
 
-    profile = conn.execute(
-        "SELECT id FROM authority_profiles WHERE user_id = ?", (user_id,)
-    ).fetchone()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Authority profile not found")
-
-    conn.execute("DELETE FROM authority_profiles WHERE user_id = ?", (user_id,))
-    conn.commit()
+        await conn.execute("DELETE FROM authority_profiles WHERE user_id = $1", user_id)
 
     actor = get_actor_from_token(Authorization)
-    write_audit_log(conn, actor=actor, event_type="authority_profile_delete", payload={"user_id": user_id})
+    await write_audit_log(actor=actor, event_type="authority_profile_delete", payload={"user_id": user_id})
 
     return {"status": "deleted", "user_id": user_id}

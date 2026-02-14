@@ -728,7 +728,7 @@ class GeminiAdapter(ProtocolAdapter):
                 return text, None, tokens
             # Check for prompt-level blocking
             block_reason = data.get("promptFeedback", {}).get("blockReason", "")
-            err_msg = f"No candidates in Gemini response"
+            err_msg = "No candidates in Gemini response"
             if block_reason:
                 err_msg += f" (blockReason={block_reason})"
             return "", err_msg, tokens

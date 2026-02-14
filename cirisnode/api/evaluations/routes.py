@@ -12,16 +12,16 @@ GET    /api/v1/usage                 — tiered usage meter (Community / Pro / E
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
-from cirisnode.api.a2a.auth import validate_a2a_auth
+from cirisnode.auth.dependencies import require_auth as validate_a2a_auth
 from cirisnode.utils.signer import sign_data, get_public_key_pem
-from cirisnode.api.agentbeats.portal_client import get_portal_client
-from cirisnode.api.agentbeats.quota import count_evals_in_window
+from cirisnode.services.portal_client import get_portal_client
+from cirisnode.services.quota import count_evals_in_window
 from cirisnode.db.pg_pool import get_pg_pool
 from cirisnode.schema.evaluation_schemas import (
     ArchiveRequest,

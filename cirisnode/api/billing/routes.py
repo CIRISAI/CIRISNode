@@ -8,14 +8,13 @@ POST /api/v1/billing/webhook   — Stripe webhook (forwarded raw to Engine)
 
 import logging
 import time
-from typing import Optional
 
 _SAFE_ERROR_CODES = {400: "Bad request", 401: "Unauthorized", 403: "Forbidden", 503: "Service unavailable"}
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from cirisnode.api.agentbeats.auth import resolve_actor
+from cirisnode.auth.dependencies import require_auth as resolve_actor
 from cirisnode.config import settings
 
 logger = logging.getLogger(__name__)

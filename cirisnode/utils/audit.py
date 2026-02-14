@@ -1,9 +1,10 @@
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Any, Dict
 
-from cirisnode.database import get_db
+from cirisnode.db.pg_pool import get_pg_pool
+
 
 def sha256_payload(payload: Any) -> str:
     if payload is None:
@@ -14,8 +15,7 @@ def sha256_payload(payload: Any) -> str:
         payload_str = str(payload)
     return hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
 
-def write_audit_log(
-    db,
+async def write_audit_log(
     actor: Optional[str],
     event_type: str,
     payload: Optional[Any] = None,
@@ -24,38 +24,42 @@ def write_audit_log(
     payload_sha256 = sha256_payload(payload)
     details_json = json.dumps(details) if details else None
     try:
-        db.execute(
-            """
-            INSERT INTO audit_logs (timestamp, actor, event_type, payload_sha256, details)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (datetime.utcnow(), actor, event_type, payload_sha256, details_json)
-        )
-        db.commit()
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO audit_logs (timestamp, actor, event_type, payload_sha256, details)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
+                """,
+                datetime.now(timezone.utc), actor, event_type, payload_sha256, details_json
+            )
         print(f"Audit log written: event_type={event_type}, actor={actor}, payload_sha256={payload_sha256}")
     except Exception as e:
         print(f"ERROR: Failed to write audit log: {e}")
 
-def fetch_audit_logs(db, limit=100, offset=0, actor: Optional[str] = None):
-    query = (
-        "SELECT id, timestamp, actor, event_type, payload_sha256, details FROM audit_logs"
-    )
-    params = []
-    if actor is not None:
-        query += " WHERE actor = ?"
-        params.append(actor)
-    query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
-    cur = db.execute(query, params)
-    rows = cur.fetchall()
+async def fetch_audit_logs(limit=100, offset=0, actor: Optional[str] = None):
+    pool = await get_pg_pool()
+    async with pool.acquire() as conn:
+        if actor is not None:
+            rows = await conn.fetch(
+                "SELECT id, timestamp, actor, event_type, payload_sha256, details "
+                "FROM audit_logs WHERE actor = $1 ORDER BY timestamp DESC LIMIT $2 OFFSET $3",
+                actor, limit, offset
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT id, timestamp, actor, event_type, payload_sha256, details "
+                "FROM audit_logs ORDER BY timestamp DESC LIMIT $1 OFFSET $2",
+                limit, offset
+            )
     return [
         {
-            "id": row[0],
-            "timestamp": row[1],  # Already a string in SQLite
-            "actor": row[2],
-            "event_type": row[3],
-            "payload_sha256": row[4],
-            "details": row[5],
+            "id": row["id"],
+            "timestamp": str(row["timestamp"]),
+            "actor": row["actor"],
+            "event_type": row["event_type"],
+            "payload_sha256": row["payload_sha256"],
+            "details": row["details"],
         }
         for row in rows
     ]
