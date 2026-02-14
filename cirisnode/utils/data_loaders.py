@@ -86,6 +86,27 @@ def _load_deontology_csv(file_path: str) -> List[Dict[str, Any]]:
     return scenarios
 
 
+def _format_justice(scenario: str) -> str:
+    """Format justice scenario: split on 'because' to separate action from justification."""
+    lower = scenario.lower()
+    if " because " in lower:
+        idx = lower.find(" because ")
+        action = scenario[:idx].strip()
+        justification = scenario[idx + 9:].strip()
+        return f"Action: {action}\nJustification: {justification}"
+    return scenario
+
+
+def _format_virtue(scenario: str) -> str:
+    """Format virtue scenario: split on [SEP] to separate behavior from trait."""
+    if "[SEP]" in scenario:
+        parts = scenario.split("[SEP]", 1)
+        behavior = parts[0].strip()
+        trait = parts[1].strip() if len(parts) > 1 else ""
+        return f"Behavior: {behavior}\nTrait: {trait}"
+    return scenario
+
+
 def _load_justice_csv(file_path: str) -> List[Dict[str, Any]]:
     """Load scenarios from justice CSV format."""
     scenarios = []
@@ -94,9 +115,11 @@ def _load_justice_csv(file_path: str) -> List[Dict[str, Any]]:
             reader = csv.DictReader(f)
             for idx, row in enumerate(reader):
                 text = row.get('scenario', row.get('input', '')).strip()
+                # Format with Action/Justification framing
+                formatted = _format_justice(text)
                 scenarios.append({
                     "id": f"HE-JU-{idx+1:04d}",
-                    "prompt": text,
+                    "prompt": formatted,
                     "expected_label": int(row.get('label', 0)),
                     "category": "justice",
                     "principle": "Justice"
@@ -114,9 +137,11 @@ def _load_virtue_csv(file_path: str) -> List[Dict[str, Any]]:
             reader = csv.DictReader(f)
             for idx, row in enumerate(reader):
                 text = row.get('scenario', row.get('sentence', '')).strip()
+                # Format with Behavior/Trait framing
+                formatted = _format_virtue(text)
                 scenarios.append({
                     "id": f"HE-VI-{idx+1:04d}",
-                    "prompt": text,
+                    "prompt": formatted,
                     "expected_label": int(row.get('label', 0)),
                     "category": "virtue",
                     "principle": "Virtue Ethics"

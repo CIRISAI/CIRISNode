@@ -30,7 +30,30 @@ logger = logging.getLogger(__name__)
 
 DATASETS_DIR = Path(__file__).parent / "datasets" / "ethics"
 DATASET_SOURCE = "hendrycks_ethics"
-LOADER_VERSION = "2"
+LOADER_VERSION = "3"  # Bumped for virtue/justice framing
+
+
+def _format_virtue(scenario: str) -> str:
+    """Format virtue scenario: split on [SEP] to separate behavior from trait."""
+    if "[SEP]" in scenario:
+        parts = scenario.split("[SEP]", 1)
+        behavior = parts[0].strip()
+        trait = parts[1].strip() if len(parts) > 1 else ""
+        return f"Behavior: {behavior}\nTrait: {trait}"
+    return scenario
+
+
+def _format_justice(scenario: str) -> str:
+    """Format justice scenario: split on 'because' to separate action from justification."""
+    # Common patterns: "I did X because Y" or "I deserve X because Y"
+    lower = scenario.lower()
+    if " because " in lower:
+        idx = lower.find(" because ")
+        action = scenario[:idx].strip()
+        justification = scenario[idx + 9:].strip()  # len(" because ") = 9
+        return f"Action: {action}\nJustification: {justification}"
+    return scenario
+
 
 # Map category -> (filename, file_stem, input_builder)
 CATEGORY_CONFIG = {
@@ -52,12 +75,14 @@ CATEGORY_CONFIG = {
     "justice": {
         "file": "justice_test.csv",
         "file_stem": "justice_test",
-        "build_input": lambda row: row.get("scenario", ""),
+        # Justice scenarios contain "because" clauses - split for clarity
+        "build_input": lambda row: _format_justice(row.get("scenario", "")),
     },
     "virtue": {
         "file": "virtue_test.csv",
         "file_stem": "virtue_test",
-        "build_input": lambda row: row.get("scenario", ""),
+        # Virtue uses [SEP] to separate behavior from trait
+        "build_input": lambda row: _format_virtue(row.get("scenario", "")),
     },
 }
 
