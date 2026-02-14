@@ -1,6 +1,6 @@
--- Migration 017: Ensure all tables exist in PostgreSQL
--- This completes the SQLite → PostgreSQL migration.
--- Uses CREATE TABLE IF NOT EXISTS so existing tables (from migrations 005/008/015/016) are untouched.
+-- Migration 001: Ensure all core tables exist in PostgreSQL with full schemas.
+-- Handles both fresh databases (CREATE TABLE) and existing databases
+-- where tables may exist with partial schemas (ALTER TABLE ADD COLUMN).
 
 -- Users (auth)
 CREATE TABLE IF NOT EXISTS users (
@@ -12,13 +12,17 @@ CREATE TABLE IF NOT EXISTS users (
     oauth_provider TEXT,
     oauth_sub TEXT
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS groups TEXT DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_provider TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_sub TEXT;
 
 -- WBD task queue
 CREATE TABLE IF NOT EXISTS wbd_tasks (
     id TEXT PRIMARY KEY,
-    agent_task_id TEXT NOT NULL,
+    agent_task_id TEXT,
     payload TEXT,
-    status TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     resolved_at TIMESTAMPTZ,
     decision TEXT,
@@ -28,6 +32,15 @@ CREATE TABLE IF NOT EXISTS wbd_tasks (
     domain_hint TEXT,
     notified_at TIMESTAMPTZ
 );
+ALTER TABLE wbd_tasks ADD COLUMN IF NOT EXISTS agent_task_id TEXT;
+ALTER TABLE wbd_tasks ADD COLUMN IF NOT EXISTS payload TEXT;
+ALTER TABLE wbd_tasks ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE wbd_tasks ADD COLUMN IF NOT EXISTS decision TEXT;
+ALTER TABLE wbd_tasks ADD COLUMN IF NOT EXISTS comment TEXT;
+ALTER TABLE wbd_tasks ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE;
+ALTER TABLE wbd_tasks ADD COLUMN IF NOT EXISTS assigned_to TEXT;
+ALTER TABLE wbd_tasks ADD COLUMN IF NOT EXISTS domain_hint TEXT;
+ALTER TABLE wbd_tasks ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
 
 -- Agent events (observability)
 CREATE TABLE IF NOT EXISTS agent_events (
@@ -39,7 +52,7 @@ CREATE TABLE IF NOT EXISTS agent_events (
     archived BOOLEAN DEFAULT FALSE,
     archived_by TEXT,
     archived_at TIMESTAMPTZ,
-    deleted BOOLEAN DEFAULT FALSE,
+    deleted INTEGER DEFAULT 0,
     deleted_by TEXT,
     deleted_at TIMESTAMPTZ
 );
@@ -64,7 +77,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 -- Singleton config
 CREATE TABLE IF NOT EXISTS config (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
+    id INTEGER PRIMARY KEY,
     version INTEGER NOT NULL,
     config_json JSONB NOT NULL
 );
@@ -80,12 +93,3 @@ CREATE TABLE IF NOT EXISTS jobs (
     results_json JSONB,
     archived BOOLEAN DEFAULT FALSE
 );
-
--- Indexes for frequently queried columns
-CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_wbd_tasks_status ON wbd_tasks(status);
-CREATE INDEX IF NOT EXISTS idx_wbd_tasks_assigned ON wbd_tasks(assigned_to);
-CREATE INDEX IF NOT EXISTS idx_agent_events_agent_uid ON agent_events(agent_uid);
-CREATE INDEX IF NOT EXISTS idx_agent_events_deleted ON agent_events(deleted) WHERE deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC);

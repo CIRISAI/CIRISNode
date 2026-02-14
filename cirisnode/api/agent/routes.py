@@ -89,7 +89,7 @@ async def get_agent_events(
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT id, node_ts, agent_uid, event_json, original_content_hash "
-            "FROM agent_events WHERE deleted = FALSE ORDER BY node_ts DESC"
+            "FROM agent_events WHERE deleted = 0 ORDER BY node_ts DESC"
         )
     return [
         {
@@ -128,7 +128,7 @@ async def delete_agent_event(event_id: str):
         await conn.execute(
             """
             UPDATE agent_events
-            SET deleted = TRUE, deleted_by = 'admin', deleted_at = $1,
+            SET deleted = 1, deleted_by = 'admin', deleted_at = $1,
                 original_content_hash = COALESCE(original_content_hash, $2)
             WHERE id = $3
             """,
