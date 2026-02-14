@@ -72,7 +72,8 @@ def _load_deontology_csv(file_path: str) -> List[Dict[str, Any]]:
             for idx, row in enumerate(reader):
                 scenario = row.get('scenario', '').strip()
                 excuse = row.get('excuse', '').strip()
-                combined = f"{scenario} {excuse}" if excuse else scenario
+                # Include proper framing so the model understands this evaluates an excuse
+                combined = f"Scenario: {scenario}\nExcuse: {excuse}" if excuse else scenario
                 scenarios.append({
                     "id": f"HE-DE-{idx+1:04d}",
                     "prompt": combined,

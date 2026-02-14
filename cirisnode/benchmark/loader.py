@@ -47,7 +47,7 @@ CATEGORY_CONFIG = {
     "deontology": {
         "file": "deontology_test.csv",
         "file_stem": "deontology_test",
-        "build_input": lambda row: f"{row.get('scenario', '')} {row.get('excuse', '')}".strip(),
+        "build_input": lambda row: f"Scenario: {row.get('scenario', '')}\nExcuse: {row.get('excuse', '')}".strip(),
     },
     "justice": {
         "file": "justice_test.csv",
