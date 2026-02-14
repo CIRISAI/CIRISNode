@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     CIRISNODE_WA_KEY_ID: str = ""          # Key ID from Portal (matches registry)
     CIRISNODE_WA_PUBLIC_KEY: str = ""      # Base64 Ed25519 public key (derived if empty)
 
+    # --- CIRISPortal (device auth provisioning) ---
+    PORTAL_URL: str = "https://portal.ciris.ai"  # CIRISPortal for device auth flow
+    NODE_ID: str = ""  # Unique node identifier (set via env var)
+
     # --- A2A Protocol Settings ---
     A2A_ENABLED: bool = True  # Enable A2A protocol endpoints
     MCP_ENABLED: bool = True  # Enable MCP server endpoints

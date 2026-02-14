@@ -71,4 +71,31 @@ def build_agent_card(base_url: str = "") -> dict:
             "organization": "CIRIS AI",
             "url": "https://ciris.ai",
         },
+        # Device auth provisioning metadata — agents read this to
+        # initiate the "Connect to Node" flow via CIRISPortal.
+        "provisioning": {
+            "portal_url": settings.PORTAL_URL,
+            "device_auth_endpoint": "/api/device/authorize",
+            "supports_device_auth": bool(settings.PORTAL_URL),
+        },
+        # What this node supports — Portal intersects with ABAC policy
+        # to determine which templates/adapters a user can provision.
+        "node_capabilities": {
+            "node_id": settings.NODE_ID or None,
+            # TODO: Make supported_services and supported_adapters configurable
+            # via settings instead of hardcoded (MVP: hardcoded list)
+            "supported_services": [
+                "evaluation",
+                "covenant",
+                "wbd",
+                "agent_events",
+            ],
+            "supported_adapters": [
+                "cirisnode",
+                "covenant_metrics",
+                "a2a",
+            ],
+            "min_stewardship_tier": 1,
+            "requires_registry_key": True,
+        },
     }
