@@ -97,7 +97,8 @@ def get_wbd_tasks(
             })
         return {"tasks": tasks}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error retrieving WBD tasks")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @wbd_router.get("/tasks/{task_id}")
@@ -134,8 +135,8 @@ def get_wbd_task(task_id: str, db: sqlite3.Connection = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error retrieving WBD task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error retrieving WBD task %s", task_id)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @wbd_router.post(

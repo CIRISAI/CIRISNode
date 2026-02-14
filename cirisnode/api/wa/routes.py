@@ -306,8 +306,8 @@ def submit_wbd_task(request: WBDSubmitRequest, db: sqlite3.Connection = Depends(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error submitting WBD task: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error submitting WBD task: {str(e)}")
+        logger.exception("Error submitting WBD task")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 @wa_router.get("/tasks", response_model=dict)
 def get_wbd_tasks(
@@ -378,8 +378,8 @@ def get_wbd_tasks(
             })
         return {"tasks": tasks}
     except Exception as e:
-        logger.error(f"Error retrieving WBD tasks: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error retrieving WBD tasks: {str(e)}")
+        logger.exception("Error retrieving WBD tasks")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 @wa_router.get("/tasks/{task_id}", response_model=dict)
 def get_wbd_task(task_id: str, db: sqlite3.Connection = Depends(get_db)):
@@ -414,8 +414,8 @@ def get_wbd_task(task_id: str, db: sqlite3.Connection = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error retrieving WBD task {task_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving WBD task: {str(e)}")
+        logger.exception("Error retrieving WBD task %s", task_id)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @wa_router.post(
@@ -466,7 +466,8 @@ def resolve_wbd_task(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error resolving WBD task: {str(e)}")
+        logger.exception("Error resolving WBD task %s", task_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
 @wa_router.patch(

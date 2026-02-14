@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     matrix_room_id: str = ""
     node_api_url: str = ""
     REDIS_URL: str = "redis://localhost:6379/0"  # Default Redis URL
-    DATABASE_URL: str = "postgresql://postgres:password@db:5432/cirisnode"  # PostgreSQL for evaluations read path
+    DATABASE_URL: str = ""  # PostgreSQL for evaluations read path — MUST be set via env var
     app_name: str = "CIRISNode"
     max_concurrent_requests: int = 100
     JWT_SECRET: str = ""  # REQUIRED — set via JWT_SECRET env var or .env file
@@ -92,3 +92,24 @@ def _validate_jwt_secret():
 
 
 _validate_jwt_secret()
+
+
+def _validate_database_url():
+    """Warn or raise if DATABASE_URL is missing in production."""
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    db_url = settings.DATABASE_URL
+    if not db_url:
+        import os
+        environment = os.environ.get("ENVIRONMENT", "")
+        if environment == "test":
+            _logger.warning("DATABASE_URL is not set. Using empty default for test environment.")
+        else:
+            _logger.warning(
+                "DATABASE_URL is not set. Set DATABASE_URL environment variable "
+                "to connect to PostgreSQL."
+            )
+
+
+_validate_database_url()

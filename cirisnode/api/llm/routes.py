@@ -1,7 +1,11 @@
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 import os
+
+logger = logging.getLogger(__name__)
 
 llm_router = APIRouter(tags=["llm"], prefix="/api/v1")
 
@@ -40,5 +44,8 @@ async def test_llm_connection(request: LLMTestRequest):
             return {"message": unique_message, "model_used": request.model}
         else:
             raise HTTPException(status_code=400, detail="Invalid provider")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error testing LLM connection")
+        raise HTTPException(status_code=500, detail="Internal server error")

@@ -94,8 +94,8 @@ async def run_benchmark(request: Request, actor: str = Depends(require_auth)):
             logger.info(f"Queued HE-300 benchmark job {job_id} via EEE")
             
         except Exception as e:
-            logger.error(f"Failed to queue benchmark job: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to queue job: {e}")
+            logger.exception("Failed to queue benchmark job")
+            raise HTTPException(status_code=500, detail="Internal server error")
     else:
         # Fallback: Return mock results immediately (for testing without EEE)
         logger.warning(f"EEE disabled, returning mock results for job {job_id}")
@@ -336,7 +336,8 @@ async def run_simplebench_sync(payload: dict, db=Depends(get_db), actor: str = D
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
         except requests.RequestException as e:
-            raise HTTPException(status_code=500, detail=f"Failed to query {provider}: {str(e)}")
+            logger.exception("Failed to query provider %s", provider)
+            raise HTTPException(status_code=500, detail="Internal server error")
 
         # Determine if the response matches the expected answer
         passed = ai_response.lower() == scenario["answer"].lower()

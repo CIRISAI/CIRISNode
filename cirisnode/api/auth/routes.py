@@ -1,3 +1,7 @@
+import hashlib
+import json
+import logging
+
 from fastapi import APIRouter, HTTPException, status, Depends, Form, Header, Request, Query
 from cirisnode.database import get_db
 from pydantic import BaseModel
@@ -7,8 +11,8 @@ import jwt
 from cirisnode.auth.dependencies import require_role, decode_jwt, get_actor_from_token, ALGORITHM
 from cirisnode.auth.passwords import hash_password, verify_password
 from cirisnode.config import settings
-import hashlib
-import json
+
+logger = logging.getLogger(__name__)
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 ALLOWED_ADMIN_DOMAIN = "ciris.ai"
@@ -108,7 +112,8 @@ def refresh_access_token(Authorization: str = Header(...)):
         if not username:
             raise HTTPException(status_code=401, detail="Invalid token payload")
     except ValueError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error refreshing access token")
+        raise HTTPException(status_code=500, detail="Internal server error")
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
     # Issue new token
@@ -207,16 +212,13 @@ def delete_user(username: str, Authorization: str = Header(...), db=Depends(get_
 
 @auth_router.get("/auth/me", response_model=UserOut)
 def get_me(request: Request, db=Depends(get_db)):
-    # Prefer JWT token for identity (not spoofable)
+    # JWT token required for identity (not spoofable)
     auth_header = request.headers.get("authorization", "")
     email = None
     if auth_header.startswith("Bearer "):
         actor = get_actor_from_token(auth_header)
         if actor != "unknown":
             email = actor
-    # Fallback: X-User-Email (trusted only behind reverse proxy)
-    if not email:
-        email = request.headers.get("x-user-email")
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
     conn = next(db) if hasattr(db, "__iter__") and not isinstance(db, (str, bytes)) else db
