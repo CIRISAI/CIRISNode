@@ -5,6 +5,7 @@ that CIRISBench writes to. Read-only — no ORM needed.
 """
 
 import logging
+import re
 from typing import Optional
 
 import asyncpg
@@ -12,6 +13,11 @@ import asyncpg
 from cirisnode.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_db_url(url: str) -> str:
+    """Mask password in database URL for safe logging."""
+    return re.sub(r"(://[^:]+:)[^@]+(@)", r"\1****\2", url)
 
 _pool: Optional[asyncpg.Pool] = None
 
@@ -24,7 +30,7 @@ async def get_pg_pool() -> asyncpg.Pool:
     """
     global _pool
     if _pool is None or _pool._closed:
-        logger.info("Creating PostgreSQL connection pool: %s", settings.DATABASE_URL)
+        logger.info("Creating PostgreSQL connection pool: %s", _sanitize_db_url(settings.DATABASE_URL))
         _pool = await asyncpg.create_pool(
             settings.DATABASE_URL,
             min_size=2,

@@ -18,7 +18,7 @@ directory = ".open-next/assets"
 binding = "ASSETS"
 
 [build]
-command = "npm run build:cf"
+command = "NEXT_PUBLIC_API_URL=https://api.ethicsengine.org npm run build:cf"
 
 [observability.logs]
 enabled = true
