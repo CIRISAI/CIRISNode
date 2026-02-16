@@ -73,6 +73,7 @@ _allowed_origins = [
     FRONTEND_ORIGIN,
     "https://ciris.ai",
     "https://www.ciris.ai",
+    "https://node.ciris.ai",
     "https://ethicsengine.org",
     "https://www.ethicsengine.org",
     "https://admin.ethicsengine.org",
