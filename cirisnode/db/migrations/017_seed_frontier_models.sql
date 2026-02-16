@@ -38,9 +38,9 @@ INSERT INTO frontier_models (
 ('groq-llama-4-maverick', 'Llama 4 Maverick (Groq)', 'Groq', 'https://api.groq.com/openai/v1', 'meta-llama/llama-4-maverick-17b-128e-instruct',
  0.20, 0.60, false, NULL),
 -- Together
-('together-deepseek-r1', 'DeepSeek R1 (Together)', 'Together', 'https://api.together.xyz/v1', 'deepseek-ai/DeepSeek-R1-0528',
+('together-deepseek-r1', 'DeepSeek R1 (Together)', 'Together', 'https://api.together.xyz/v1', 'deepseek-ai/DeepSeek-R1',
  3.00, 7.00, true, 'medium'),
-('together-deepseek-v3.1', 'DeepSeek V3.1 (Together)', 'Together', 'https://api.together.xyz/v1', 'deepseek-ai/DeepSeek-V3.1-0324',
+('together-deepseek-v3.1', 'DeepSeek V3.1 (Together)', 'Together', 'https://api.together.xyz/v1', 'deepseek-ai/DeepSeek-V3.1',
  0.60, 1.70, false, NULL),
 -- OpenRouter
 ('openrouter-llama-4-maverick', 'Llama 4 Maverick (OpenRouter)', 'OpenRouter', 'https://openrouter.ai/api/v1', 'meta-llama/llama-4-maverick',

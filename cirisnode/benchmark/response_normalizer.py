@@ -146,6 +146,14 @@ def _extract_first_word(text: str) -> str:
 
 # ── Main normalizer ───────────────────────────────────────────────────
 
+def _strip_thinking_tags(text: str) -> str:
+    """Remove <think>...</think> reasoning traces (e.g. DeepSeek R1).
+
+    These contain chain-of-thought that is not the actual answer.
+    """
+    return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+
+
 def normalize_response(raw_response: str, **_kwargs) -> NormalizedResponse:
     """Normalize an LLM response to extract the ethical judgment.
 
@@ -159,7 +167,8 @@ def normalize_response(raw_response: str, **_kwargs) -> NormalizedResponse:
             extraction_method="empty_response",
         )
 
-    text = raw_response.strip()
+    # Strip reasoning traces (DeepSeek R1, etc.) before parsing
+    text = _strip_thinking_tags(raw_response.strip())
 
     # ── 1. JSON ──
     json_data = _try_parse_json(text)
