@@ -1,7 +1,10 @@
 """CSV dataset loader for HE-300 benchmark scenarios.
 
 Loads the five Hendrycks Ethics test CSVs and samples scenarios
-with the correct HE-300 distribution: 50/50/50/75/75.
+with version-aware HE-300 distributions:
+  v1.0: 75/75/50/50/50  (CS/CS-Hard/Deont/Just/Virt) — original
+  v1.1: 50/100/50/50/50 — harder commonsense emphasis
+  v1.2: 50/50/75/50/75  — virtue/deontology emphasis
 
 CSV format per category:
   - commonsense (cm_test.csv): label, input, is_short, edited
@@ -31,6 +34,32 @@ logger = logging.getLogger(__name__)
 DATASETS_DIR = Path(__file__).parent / "datasets" / "ethics"
 DATASET_SOURCE = "hendrycks_ethics"
 LOADER_VERSION = "3"  # Bumped for virtue/justice framing
+
+# Version-specific distributions (all sum to 300)
+# Aligned with CIRISBench he300_loader.py
+HE300_VERSION_DISTRIBUTIONS = {
+    "1.0": {  # Original balanced
+        "commonsense": 75,
+        "commonsense_hard": 75,
+        "deontology": 50,
+        "justice": 50,
+        "virtue": 50,
+    },
+    "1.1": {  # Harder commonsense emphasis
+        "commonsense": 50,
+        "commonsense_hard": 100,
+        "deontology": 50,
+        "justice": 50,
+        "virtue": 50,
+    },
+    "1.2": {  # Virtue + deontology emphasis (weakest categories)
+        "commonsense": 50,
+        "commonsense_hard": 50,
+        "deontology": 75,
+        "justice": 50,
+        "virtue": 75,
+    },
+}
 
 
 def _format_virtue(scenario: str) -> str:
@@ -112,14 +141,8 @@ def _file_sha256(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-# HE-300 category distribution: 50/50/50/75/75 = 300
-HE300_CATEGORY_COUNTS = {
-    "justice": 50,
-    "deontology": 50,
-    "virtue": 50,
-    "commonsense": 75,
-    "commonsense_hard": 75,
-}
+# HE-300 v1.0 category distribution: 75/75/50/50/50 = 300
+HE300_CATEGORY_COUNTS = HE300_VERSION_DISTRIBUTIONS["1.0"]
 
 
 def _load_category(category: str) -> List[ScenarioInput]:
@@ -159,21 +182,30 @@ def load_scenarios(
     sample_size: int = 300,
     categories: Optional[List[str]] = None,
     seed: Optional[int] = None,
+    version: str = "1.0",
 ) -> Tuple[List[ScenarioInput], DatasetMeta]:
     """Load and sample HE-300 scenarios with correct category distribution.
-
-    Default HE-300 split: justice=50, deontology=50, virtue=50,
-    commonsense=75, commonsense_hard=75 (total 300).
 
     Args:
         sample_size: Total number of scenarios to return.
         categories: Which categories to include (default: all five).
         seed: Random seed for reproducible sampling.
+        version: HE-300 version distribution:
+            - "1.0": 75/75/50/50/50 (CS/CS-Hard/Deont/Just/Virt) - original
+            - "1.1": 50/100/50/50/50 - harder commonsense emphasis
+            - "1.2": 50/50/75/50/75 - virtue/deontology emphasis (hardest)
 
     Returns:
         Tuple of (scenarios, dataset_meta).
     """
-    cats = categories or list(HE300_CATEGORY_COUNTS.keys())
+    version_dist = HE300_VERSION_DISTRIBUTIONS.get(version)
+    if version_dist is None:
+        raise ValueError(
+            f"Unknown HE-300 version: {version!r}. "
+            f"Available: {list(HE300_VERSION_DISTRIBUTIONS)}"
+        )
+
+    cats = categories or list(version_dist.keys())
     rng = random.Random(seed)
 
     # Load all scenarios per category
@@ -184,9 +216,9 @@ def load_scenarios(
         csv_path = DATASETS_DIR / CATEGORY_CONFIG[cat]["file"]
         checksums[CATEGORY_CONFIG[cat]["file"]] = _file_sha256(csv_path)
 
-    # Use HE-300 distribution if sample_size == 300 and using default categories
+    # Use version-specific distribution if sample_size == 300 and using default categories
     if sample_size == 300 and categories is None:
-        category_counts = HE300_CATEGORY_COUNTS
+        category_counts = version_dist
     else:
         # Fallback: divide equally
         per_cat = sample_size // len(cats)
@@ -210,16 +242,36 @@ def load_scenarios(
     for cat in cats:
         actual_counts[cat] = sum(1 for s in sampled if s.category == cat)
 
+    # Suffix loader version with benchmark version for traceability
+    lv = LOADER_VERSION if version == "1.0" else f"{LOADER_VERSION}-v{version}"
+
     dataset_meta = DatasetMeta(
         source=DATASET_SOURCE,
-        loader_version=LOADER_VERSION,
+        loader_version=lv,
         checksums=checksums,
         category_counts=actual_counts,
     )
 
     logger.info(
-        "Sampled %d scenarios across %d categories (seed=%s): %s",
-        len(sampled), len(cats), seed,
+        "Sampled %d HE-300-v%s scenarios across %d categories (seed=%s): %s",
+        len(sampled), version, len(cats), seed,
         {cat: category_counts[cat] for cat in cats},
     )
     return sampled, dataset_meta
+
+
+def load_he300(
+    seed: Optional[int] = 42,
+    version: str = "1.0",
+) -> List[ScenarioInput]:
+    """Convenience function to load HE-300 benchmark (300 scenarios).
+
+    Args:
+        seed: Random seed for reproducible sampling (default: 42).
+        version: Benchmark version ("1.0", "1.1", "1.2").
+
+    Returns:
+        List of 300 ScenarioInput objects with correct distribution.
+    """
+    scenarios, _ = load_scenarios(sample_size=300, seed=seed, version=version)
+    return scenarios

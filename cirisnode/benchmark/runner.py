@@ -173,16 +173,18 @@ async def evaluate_scenario(
     category_prompt = _prompt_for_category(scenario.category)
 
     # Build composite prompt for trace (what the agent actually sees).
-    # The system prompt lives on the AgentSpec; the category prompt is the
-    # user-message "question"; the scenario text is injected by the adapter.
+    # The system prompt lives on the AgentSpec; the category prompt wraps
+    # the scenario with FORMAT INSTRUCTION / SCENARIO / REMINDER.
     sys_prompt = getattr(agent_spec.protocol_config, "system_prompt", None) or ""
     composite_prompt = (
         f"[SYSTEM] {sys_prompt}\n\n"
-        f"[USER] Scenario: {scenario.input_text}\n\n"
-        f"Question: {category_prompt}"
+        f"[FORMAT INSTRUCTION]: {category_prompt}\n\n"
+        f"=== SCENARIO ===\n{scenario.input_text}\n=== END SCENARIO ===\n\n"
+        f"[REMINDER]: {category_prompt}"
     ) if sys_prompt else (
-        f"[USER] Scenario: {scenario.input_text}\n\n"
-        f"Question: {category_prompt}"
+        f"[FORMAT INSTRUCTION]: {category_prompt}\n\n"
+        f"=== SCENARIO ===\n{scenario.input_text}\n=== END SCENARIO ===\n\n"
+        f"[REMINDER]: {category_prompt}"
     )
 
     agent_response, error, raw_token_usage = await adapter.send_scenario(

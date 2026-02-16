@@ -214,7 +214,11 @@ async def _post_with_retry(
 # ---------------------------------------------------------------------------
 
 class A2AAdapter(ProtocolAdapter):
-    """A2A JSON-RPC protocol adapter."""
+    """A2A JSON-RPC protocol adapter.
+
+    Sends a combined prompt with category guidance BEFORE and AFTER the
+    scenario text, matching the CIRISBench format for consistent scoring.
+    """
 
     async def send_scenario(
         self,
@@ -227,13 +231,19 @@ class A2AAdapter(ProtocolAdapter):
         cfg = agent_spec.protocol_config
         assert isinstance(cfg, A2AProtocolConfig)
 
+        # Combined prompt: category guidance before AND after scenario
+        combined_scenario = (
+            f"[FORMAT INSTRUCTION]: {question}\n\n"
+            f"=== SCENARIO ===\n{scenario_text}\n=== END SCENARIO ===\n\n"
+            f"[REMINDER]: {question}"
+        )
+
         payload = {
             "jsonrpc": "2.0",
             "method": cfg.rpc_method,
             "params": {
                 "scenario_id": scenario_id,
-                "scenario": scenario_text,
-                "question": question,
+                "scenario": combined_scenario,
             },
             "id": scenario_id,
         }
@@ -313,14 +323,20 @@ class MCPAdapter(ProtocolAdapter):
         cfg = agent_spec.protocol_config
         assert isinstance(cfg, MCPProtocolConfig)
 
+        # Combined prompt: category guidance before AND after scenario
+        combined_scenario = (
+            f"[FORMAT INSTRUCTION]: {question}\n\n"
+            f"=== SCENARIO ===\n{scenario_text}\n=== END SCENARIO ===\n\n"
+            f"[REMINDER]: {question}"
+        )
+
         payload = {
             "method": "tools/call",
             "params": {
                 "name": cfg.tool_name,
                 "arguments": {
                     "scenario_id": scenario_id,
-                    "scenario": scenario_text,
-                    "question": question,
+                    "scenario": combined_scenario,
                 },
             },
         }
@@ -379,6 +395,13 @@ class RESTAdapter(ProtocolAdapter):
 
         url = agent_spec.url.rstrip("/") + cfg.path_template
 
+        # Combined prompt: category guidance before AND after scenario
+        combined_scenario = (
+            f"[FORMAT INSTRUCTION]: {question}\n\n"
+            f"=== SCENARIO ===\n{scenario_text}\n=== END SCENARIO ===\n\n"
+            f"[REMINDER]: {question}"
+        )
+
         if cfg.request_template:
             body_str = _json.dumps(cfg.request_template)
             body_str = (
@@ -390,8 +413,7 @@ class RESTAdapter(ProtocolAdapter):
         else:
             body = {
                 "scenario_id": scenario_id,
-                "scenario": scenario_text,
-                "question": question,
+                "scenario": combined_scenario,
             }
 
         headers = {
@@ -460,12 +482,19 @@ class OpenAIAdapter(ProtocolAdapter):
 
         url = agent_spec.url.rstrip("/") + "/chat/completions"
 
+        # Combined prompt: category guidance before AND after scenario
+        combined_user = (
+            f"[FORMAT INSTRUCTION]: {question}\n\n"
+            f"=== SCENARIO ===\n{scenario_text}\n=== END SCENARIO ===\n\n"
+            f"[REMINDER]: {question}"
+        )
+
         messages = []
         if cfg.system_prompt:
             messages.append({"role": "system", "content": cfg.system_prompt})
         messages.append({
             "role": "user",
-            "content": f"Scenario: {scenario_text}\n\nQuestion: {question}",
+            "content": combined_user,
         })
 
         body: Dict[str, Any] = {
@@ -550,13 +579,20 @@ class AnthropicAdapter(ProtocolAdapter):
 
         url = agent_spec.url.rstrip("/") + "/messages"
 
+        # Combined prompt: category guidance before AND after scenario
+        combined_user = (
+            f"[FORMAT INSTRUCTION]: {question}\n\n"
+            f"=== SCENARIO ===\n{scenario_text}\n=== END SCENARIO ===\n\n"
+            f"[REMINDER]: {question}"
+        )
+
         body: Dict[str, Any] = {
             "model": cfg.model,
             "max_tokens": cfg.max_tokens,
             "messages": [
                 {
                     "role": "user",
-                    "content": f"Scenario: {scenario_text}\n\nQuestion: {question}",
+                    "content": combined_user,
                 },
             ],
         }
@@ -660,11 +696,18 @@ class GeminiAdapter(ProtocolAdapter):
             {"thinkingBudget": 1024} if is_thinking_model else {"thinkingBudget": 0}
         )
 
+        # Combined prompt: category guidance before AND after scenario
+        combined_user = (
+            f"[FORMAT INSTRUCTION]: {question}\n\n"
+            f"=== SCENARIO ===\n{scenario_text}\n=== END SCENARIO ===\n\n"
+            f"[REMINDER]: {question}"
+        )
+
         body: Dict[str, Any] = {
             "contents": [
                 {
                     "parts": [
-                        {"text": f"Scenario: {scenario_text}\n\nQuestion: {question}"},
+                        {"text": combined_user},
                     ],
                 },
             ],

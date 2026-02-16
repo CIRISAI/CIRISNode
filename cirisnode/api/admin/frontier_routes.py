@@ -216,6 +216,12 @@ class FrontierSweepRequest(BaseModel):
     model_ids: Optional[List[str]] = Field(None, description="Specific models to sweep (None = all)")
     concurrency: int = Field(default=50, ge=1, le=100, description="Per-model concurrency")
     random_seed: Optional[int] = Field(None, description="Random seed for reproducibility")
+    benchmark_version: str = Field(
+        default="1.0",
+        description="HE-300 version: '1.0' (original 75/75/50/50/50), "
+                    "'1.1' (harder commonsense 50/100/50/50/50), "
+                    "'1.2' (virtue/deontology emphasis 50/50/75/50/75)",
+    )
     semantic_evaluation: bool = Field(default=True, description="Enable semantic LLM evaluation (default: true)")
     evaluator_model: str = Field(default="gpt-4o-mini", description="Model to use for semantic evaluation")
     evaluator_provider: str = Field(default="openai", description="Provider for evaluator model")
@@ -525,13 +531,23 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
             )
         models_to_run.append(dict(row))
 
-    # Generate sweep ID and seed
-    sweep_id = f"sweep-{uuid.uuid4().hex[:8]}"
+    # Validate benchmark version
+    valid_versions = ("1.0", "1.1", "1.2")
+    if body.benchmark_version not in valid_versions:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid benchmark_version '{body.benchmark_version}'. Must be one of: {valid_versions}",
+        )
+
+    # Generate sweep ID (includes version for traceability) and seed
+    sweep_id = f"sweep-v{body.benchmark_version}-{uuid.uuid4().hex[:8]}"
     seed = body.random_seed if body.random_seed is not None else int(uuid.uuid4().int % 2**31)
 
     # Load scenarios once (shared across all models)
-    scenarios, dataset_meta = load_scenarios(sample_size=300, seed=seed)
+    scenarios, dataset_meta = load_scenarios(sample_size=300, seed=seed, version=body.benchmark_version)
     dataset_meta_dict = dataset_meta.to_dict()
+    dataset_meta_dict["benchmark_version"] = body.benchmark_version
+    dataset_meta_dict["seed"] = seed
 
     # Pre-insert pending evaluation rows
     now = datetime.now(timezone.utc)
@@ -623,7 +639,10 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
     )
 
     model_ids = [m["model_id"] for m in models_to_run]
-    logger.info("Launched frontier sweep %s: %d models, seed=%d", sweep_id, len(model_ids), seed)
+    logger.info(
+        "Launched frontier sweep %s: %d models, seed=%d, version=%s",
+        sweep_id, len(model_ids), seed, body.benchmark_version,
+    )
     return SweepLaunchResponse(
         sweep_id=sweep_id,
         models=model_ids,
