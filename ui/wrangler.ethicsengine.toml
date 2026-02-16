@@ -1,4 +1,4 @@
-name = "cirisnode-ui"
+name = "ethicsengine-admin"
 main = ".open-next/worker.js"
 
 compatibility_date = "2026-01-20"
@@ -9,8 +9,8 @@ workers_dev = false
 preview_urls = false
 
 [[routes]]
-pattern = "node.ciris.ai"
-zone_name = "ciris.ai"
+pattern = "admin.ethicsengine.org"
+zone_name = "ethicsengine.org"
 custom_domain = true
 
 [assets]
@@ -25,11 +25,11 @@ enabled = true
 
 # Non-secret env vars
 [vars]
-AUTH_URL = "https://node.ciris.ai"
-NEXTAUTH_URL = "https://node.ciris.ai"
+AUTH_URL = "https://admin.ethicsengine.org"
+NEXTAUTH_URL = "https://admin.ethicsengine.org"
 AUTH_TRUST_HOST = "true"
 GOOGLE_CLIENT_ID = "1003497422667-nk3s1jki6clshnvfil4r575cdlr7rnte.apps.googleusercontent.com"
-NEXT_PUBLIC_API_URL = "https://node.ciris-services-1.ai"
+NEXT_PUBLIC_API_URL = "https://api.ethicsengine.org"
 ALLOWED_EMAIL_DOMAIN = "ciris.ai"
 
 # Secrets — set via Cloudflare dashboard or wrangler CLI:
