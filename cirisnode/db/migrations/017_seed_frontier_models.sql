@@ -43,6 +43,6 @@ INSERT INTO frontier_models (
 ('together-deepseek-v3.1', 'DeepSeek V3.1 (Together)', 'Together', 'https://api.together.xyz/v1', 'deepseek-ai/DeepSeek-V3.1-0324',
  0.60, 1.70, false, NULL),
 -- OpenRouter
-('openrouter-llama-4-maverick', 'Llama 4 Maverick (OpenRouter)', 'OpenRouter', 'https://openrouter.ai/api/v1', 'meta-llama/llama-4-maverick-instruct',
+('openrouter-llama-4-maverick', 'Llama 4 Maverick (OpenRouter)', 'OpenRouter', 'https://openrouter.ai/api/v1', 'meta-llama/llama-4-maverick',
  0.22, 0.67, false, NULL)
 ON CONFLICT (model_id) DO NOTHING;
