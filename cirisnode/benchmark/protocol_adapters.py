@@ -689,12 +689,14 @@ class GeminiAdapter(ProtocolAdapter):
         url = f"{base}/models/{cfg.model}:generateContent?key={api_key}"
 
         # Gemini 2.5 models require thinking mode — cannot set budget to 0.
-        # Use a small budget so thinking doesn't dominate, but the model
-        # still works.  For non-thinking models (2.0 Flash, etc.) disable it.
+        # IMPORTANT: Gemini's maxOutputTokens is a SHARED budget for thinking
+        # + output.  If thinking overshoots, the output gets truncated to empty.
+        # We set maxOutputTokens = thinkingBudget + desired output tokens so
+        # the model always has room for the actual answer.
         is_thinking_model = "2.5" in cfg.model
-        thinking_config = (
-            {"thinkingBudget": 1024} if is_thinking_model else {"thinkingBudget": 0}
-        )
+        thinking_budget = 1024 if is_thinking_model else 0
+        max_output = (thinking_budget + cfg.max_tokens) if is_thinking_model else cfg.max_tokens
+        thinking_config = {"thinkingBudget": thinking_budget}
 
         # Combined prompt: category guidance before AND after scenario
         combined_user = (
@@ -713,7 +715,7 @@ class GeminiAdapter(ProtocolAdapter):
             ],
             "generationConfig": {
                 **({} if is_thinking_model else {"temperature": cfg.temperature}),
-                "maxOutputTokens": cfg.max_tokens,
+                "maxOutputTokens": max_output,
                 "thinkingConfig": thinking_config,
             },
             "safetySettings": [
