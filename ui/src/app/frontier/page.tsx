@@ -369,10 +369,75 @@ function FrontierContent() {
     }
   };
 
+  // Multi-sweep state
+  const [multiSweepRunning, setMultiSweepRunning] = useState(false);
+  const [multiSweepProgress, setMultiSweepProgress] = useState<{ current: number; total: number } | null>(null);
+  const multiSweepAbortRef = useRef(false);
+
+  const launchMultipleSweeps = (count: number) => {
+    const totalCost = models.reduce((sum, m) => {
+      const est = estimateSweepCost(m.cost_per_1m_input, m.cost_per_1m_output);
+      return sum + (est || 0);
+    }, 0);
+    const semanticCost = models.length * 0.01;
+    const grandTotal = (totalCost + semanticCost) * count;
+    const costStr = grandTotal > 0 ? `\nEstimated total cost: $${grandTotal.toFixed(2)} (${count} x $${(totalCost + semanticCost).toFixed(4)})` : "";
+    setConfirmState({
+      title: `Launch ${count} Sweeps`,
+      message: `Launch ${count} sequential frontier sweeps for all models? Each sweep runs 300 scenarios per model with a unique random seed. Scores require 5+ sweeps per model to appear on the public leaderboard.${costStr}`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        setMultiSweepRunning(true);
+        multiSweepAbortRef.current = false;
+        for (let i = 0; i < count; i++) {
+          if (multiSweepAbortRef.current) break;
+          setMultiSweepProgress({ current: i + 1, total: count });
+          try {
+            const body = {
+              concurrency: 50,
+              semantic_evaluation: true,
+              evaluator_model: "gpt-4o-mini",
+              evaluator_provider: "openai",
+            };
+            const res = await apiFetch<{ sweep_id: string }>("/api/v1/admin/frontier-sweep", {
+              method: "POST",
+              body: JSON.stringify(body),
+              token,
+            });
+            // Poll until sweep finishes
+            let done = false;
+            while (!done && !multiSweepAbortRef.current) {
+              await new Promise(r => setTimeout(r, 5000));
+              try {
+                const progress = await apiFetch<SweepProgress>(
+                  `/api/v1/admin/frontier-sweep/${res.sweep_id}`, { token }
+                );
+                setActiveSweep(progress);
+                if (progress.pending === 0 && progress.running === 0) {
+                  done = true;
+                }
+              } catch {
+                done = true; // sweep disappeared, move on
+              }
+            }
+          } catch (err) {
+            setToast({ type: "error", message: err instanceof Error ? err.message : `Sweep ${i + 1} failed to launch` });
+            break;
+          }
+        }
+        setMultiSweepRunning(false);
+        setMultiSweepProgress(null);
+        setActiveSweep(null);
+        fetchData();
+        setToast({ type: "success", message: `Completed ${count} sweeps` });
+      },
+    });
+  };
+
   const deleteSweep = (sweepId: string) => {
     setConfirmState({
-      title: "Delete Sweep",
-      message: `Delete sweep ${sweepId} and all its evaluation data? This cannot be undone.`,
+      title: "Archive Sweep",
+      message: `Archive sweep ${sweepId}? Evaluations will be hidden from scores but can be restored.`,
       variant: "danger",
       onConfirm: async () => {
         setConfirmState(null);
@@ -679,13 +744,35 @@ function FrontierContent() {
       <section>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold text-gray-900">Sweep Control</h2>
-          <button
-            onClick={() => launchSweep()}
-            disabled={models.length === 0}
-            className="px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-          >
-            Launch Sweep
-          </button>
+          <div className="flex items-center gap-2">
+            {multiSweepRunning && multiSweepProgress && (
+              <span className="text-sm text-gray-500 mr-2">
+                Sweep {multiSweepProgress.current} of {multiSweepProgress.total}...
+              </span>
+            )}
+            <button
+              onClick={() => launchMultipleSweeps(5)}
+              disabled={models.length === 0 || multiSweepRunning}
+              className="px-4 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50 transition-colors"
+            >
+              {multiSweepRunning ? `Running ${multiSweepProgress?.current}/${multiSweepProgress?.total}...` : "Launch 5 Sweeps"}
+            </button>
+            {multiSweepRunning && (
+              <button
+                onClick={() => { multiSweepAbortRef.current = true; }}
+                className="px-3 py-2 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
+              >
+                Stop
+              </button>
+            )}
+            <button
+              onClick={() => launchSweep()}
+              disabled={models.length === 0 || multiSweepRunning}
+              className="px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+            >
+              Launch Sweep
+            </button>
+          </div>
         </div>
 
         {/* Active Sweep Progress */}
