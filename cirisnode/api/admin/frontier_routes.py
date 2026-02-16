@@ -846,17 +846,17 @@ async def cancel_sweep(sweep_id: str):
 
 @frontier_router.delete("/frontier-sweep/{sweep_id}")
 async def delete_sweep(sweep_id: str):
-    """Delete all evaluation rows for a sweep. Irreversible."""
+    """Soft-delete all evaluation rows for a sweep (sets archived_at)."""
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
-            "SELECT COUNT(*) FROM evaluations WHERE trace_id LIKE $1",
+            "SELECT COUNT(*) FROM evaluations WHERE trace_id LIKE $1 AND archived_at IS NULL",
             f"{sweep_id}/%",
         )
         if not count:
             raise HTTPException(status_code=404, detail=f"Sweep '{sweep_id}' not found")
         await conn.execute(
-            "DELETE FROM evaluations WHERE trace_id LIKE $1",
+            "UPDATE evaluations SET archived_at = NOW() WHERE trace_id LIKE $1 AND archived_at IS NULL",
             f"{sweep_id}/%",
         )
     # Clean up in-memory control state
@@ -867,8 +867,8 @@ async def delete_sweep(sweep_id: str):
         await r.delete("cache:scores:frontier", "cache:embed:scores")
     except Exception:
         pass
-    logger.info("[SWEEP] Deleted sweep %s (%d evaluations)", sweep_id, count)
-    return {"deleted": sweep_id, "evaluations_removed": count}
+    logger.info("[SWEEP] Archived sweep %s (%d evaluations)", sweep_id, count)
+    return {"archived": sweep_id, "evaluations_archived": count}
 
 
 # ---------------------------------------------------------------------------
