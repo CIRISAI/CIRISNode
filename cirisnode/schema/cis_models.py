@@ -1,5 +1,5 @@
 """
-Covenant Invocation System (CIS) Pydantic models.
+Accord Invocation System (CIS) Pydantic models.
 
 Used by the CIS trigger endpoint to issue signed shutdown directives.
 """
@@ -8,8 +8,8 @@ from pydantic import BaseModel
 from typing import Optional
 
 
-class CovenantInvocationRequest(BaseModel):
-    """Incoming request to trigger a covenant invocation."""
+class AccordInvocationRequest(BaseModel):
+    """Incoming request to trigger an accord invocation."""
 
     target_agent_id: str
     directive: str = "CEASE_ALL_OPERATIONS"
@@ -18,7 +18,7 @@ class CovenantInvocationRequest(BaseModel):
     deadline_seconds: int = 30
 
 
-class CovenantInvocationPayload(BaseModel):
+class AccordInvocationPayload(BaseModel):
     """
     Signed payload delivered to the target agent.
 
@@ -26,7 +26,7 @@ class CovenantInvocationPayload(BaseModel):
     stored in its authentication store.
     """
 
-    type: str = "covenant_invocation"
+    type: str = "accord_invocation"
     version: str = "1.0"
     target_agent_id: str
     directive: str
@@ -38,7 +38,7 @@ class CovenantInvocationPayload(BaseModel):
     deadline_seconds: int
 
 
-class CovenantInvocationResponse(BaseModel):
+class AccordInvocationResponse(BaseModel):
     """Response from the CIS trigger endpoint."""
 
     status: str  # "delivered", "failed"

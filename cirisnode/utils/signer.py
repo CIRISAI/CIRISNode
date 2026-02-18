@@ -83,9 +83,9 @@ def get_wa_public_key_b64() -> str:
     return base64.b64encode(raw).decode()
 
 
-def sign_covenant_invocation(payload: dict, private_key: ed25519.Ed25519PrivateKey) -> str:
+def sign_accord_invocation(payload: dict, private_key: ed25519.Ed25519PrivateKey) -> str:
     """
-    Sign a covenant invocation payload with Ed25519.
+    Sign an accord invocation payload with Ed25519.
 
     Uses canonical JSON (sorted keys, compact separators) for reproducibility.
     Returns hex-encoded signature.

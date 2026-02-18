@@ -86,13 +86,13 @@ def build_agent_card(base_url: str = "") -> dict:
             # via settings instead of hardcoded (MVP: hardcoded list)
             "supported_services": [
                 "evaluation",
-                "covenant",
+                "accord",
                 "wbd",
                 "agent_events",
             ],
             "supported_adapters": [
                 "cirisnode",
-                "covenant_metrics",
+                "accord_metrics",
                 "a2a",
             ],
             "min_stewardship_tier": 1,

@@ -13,7 +13,7 @@ from cirisnode.api.audit.routes import audit_router
 
 # ── Agent Infrastructure (Ed25519 signatures, events, A2A) ──
 from cirisnode.api.agent.routes import agent_router
-from cirisnode.api.covenant.routes import covenant_router
+from cirisnode.api.accord.routes import accord_router
 from cirisnode.api.a2a.routes import a2a_router, agent_card_router
 
 # ── Wise Authority (WBD task submission, resolution, authority mgmt) ──
@@ -115,7 +115,7 @@ app.include_router(audit_router)
 
 # ── Agent Infrastructure (Ed25519 signatures, events, A2A) ──
 app.include_router(agent_router)
-app.include_router(covenant_router)
+app.include_router(accord_router)
 app.include_router(agent_card_router)   # /.well-known/agent.json
 app.include_router(a2a_router)          # /a2a JSON-RPC
 

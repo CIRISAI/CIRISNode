@@ -65,7 +65,7 @@ async def _verify_wbd_signature(request: WBDSubmitRequest, conn) -> Optional[str
 
     # Look up registered public key
     row = await conn.fetchrow(
-        "SELECT public_key_base64, registry_verified FROM covenant_public_keys "
+        "SELECT public_key_base64, registry_verified FROM accord_public_keys "
         "WHERE key_id = $1 AND algorithm = 'ed25519'",
         request.signature_key_id
     )
@@ -251,7 +251,7 @@ async def submit_wbd_task(request: WBDSubmitRequest):
 
         # Org allowlist check: look up org_id from the signing key
         key_row = await conn.fetchrow(
-            "SELECT org_id FROM covenant_public_keys WHERE key_id = $1",
+            "SELECT org_id FROM accord_public_keys WHERE key_id = $1",
             verified_key_id,
         )
         await check_org_allowed(key_row["org_id"] if key_row else None)
@@ -522,30 +522,30 @@ async def deferral(request: DeferralRequest):
 
 
 # ============================================================================
-# Covenant Invocation System (CIS)
+# Accord Invocation System (CIS)
 # ============================================================================
 
-from cirisnode.schema.cis_models import CovenantInvocationRequest as CISRequest
+from cirisnode.schema.cis_models import AccordInvocationRequest as CISRequest
 import time as _time_mod
 
 
 @wa_router.post(
-    "/covenant-invocation",
+    "/accord-invocation",
     dependencies=[Depends(require_role(["admin"]))],
     response_model=dict,
 )
-async def trigger_covenant_invocation(
+async def trigger_accord_invocation(
     cis_request: CISRequest,
     Authorization: str = Header(...),
 ):
     """
-    Trigger a Covenant Invocation — signed shutdown directive for a target agent.
+    Trigger an Accord Invocation — signed shutdown directive for a target agent.
 
     Requires admin JWT. Signs the invocation payload with the persistent WA key
     and records it in the audit log. Delivery is via the agent events channel.
     """
-    from cirisnode.schema.cis_models import CovenantInvocationPayload
-    from cirisnode.utils.signer import get_wa_private_key, sign_covenant_invocation
+    from cirisnode.schema.cis_models import AccordInvocationPayload
+    from cirisnode.utils.signer import get_wa_private_key, sign_accord_invocation
     from cirisnode.config import settings
 
     # Validate WA key is configured
@@ -553,7 +553,7 @@ async def trigger_covenant_invocation(
     if wa_key is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="WA private key not configured — cannot sign covenant invocations",
+            detail="WA private key not configured — cannot sign accord invocations",
         )
 
     wa_key_id = settings.CIRISNODE_WA_KEY_ID
@@ -567,8 +567,8 @@ async def trigger_covenant_invocation(
     invocation_id = uuid.uuid4().hex
 
     # Build the signed payload
-    payload = CovenantInvocationPayload(
-        type="covenant_invocation",
+    payload = AccordInvocationPayload(
+        type="accord_invocation",
         version="1.0",
         target_agent_id=cis_request.target_agent_id,
         directive=cis_request.directive,
@@ -582,7 +582,7 @@ async def trigger_covenant_invocation(
 
     # Sign the payload
     payload_dict = payload.model_dump()
-    signature_hex = sign_covenant_invocation(payload_dict, wa_key)
+    signature_hex = sign_accord_invocation(payload_dict, wa_key)
 
     # Record in DB for audit trail
     pool = await get_pg_pool()
@@ -590,7 +590,7 @@ async def trigger_covenant_invocation(
     async with pool.acquire() as conn:
         try:
             await conn.execute(
-                """INSERT INTO covenant_invocations
+                """INSERT INTO accord_invocations
                    (id, target_agent_id, directive, reason, incident_id,
                     authority_wa_id, issued_by, signature, delivered, created_at)
                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9)""",
@@ -610,7 +610,7 @@ async def trigger_covenant_invocation(
         # Deliver via agent events channel
         try:
             event_payload = json.dumps({
-                "event_type": "covenant_invocation",
+                "event_type": "accord_invocation",
                 "invocation_id": invocation_id,
                 "payload": payload_dict,
                 "signature": signature_hex,
@@ -628,16 +628,16 @@ async def trigger_covenant_invocation(
 
             # Mark as delivered
             await conn.execute(
-                "UPDATE covenant_invocations SET delivered = TRUE, delivered_at = $1 WHERE id = $2",
+                "UPDATE accord_invocations SET delivered = TRUE, delivered_at = $1 WHERE id = $2",
                 datetime.now(timezone.utc), invocation_id,
             )
         except Exception as e:
-            logger.error(f"Failed to deliver covenant invocation: {e}")
+            logger.error(f"Failed to deliver accord invocation: {e}")
 
     # Audit log
     await write_audit_log(
         actor=actor,
-        event_type="covenant_invocation",
+        event_type="accord_invocation",
         payload={"invocation_id": invocation_id},
         details={
             "target_agent_id": cis_request.target_agent_id,
@@ -648,7 +648,7 @@ async def trigger_covenant_invocation(
     )
 
     logger.info(
-        f"Covenant invocation issued: id={invocation_id} "
+        f"Accord invocation issued: id={invocation_id} "
         f"target={cis_request.target_agent_id} directive={cis_request.directive} "
         f"delivered={delivered}"
     )

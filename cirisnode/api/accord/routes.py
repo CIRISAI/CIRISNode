@@ -1,12 +1,12 @@
 """
-Covenant trace ingestion endpoints with Ed25519 signature verification.
+Accord trace ingestion endpoints with Ed25519 signature verification.
 
 Auth model: agents sign payloads with their Ed25519 key. CIRISNode verifies
 signatures against public keys registered via CIRISPortal (portal.ciris.ai)
 and cross-validated against CIRISRegistry. Only data from agents with
 registry-verified keys is accepted.
 
-Key source of truth: CIRISPortal → CIRISRegistry (portal.ciris.ai)
+Key source of truth: CIRISPortal -> CIRISRegistry (portal.ciris.ai)
 """
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -24,14 +24,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-covenant_router = APIRouter(prefix="/api/v1/covenant", tags=["covenant"])
+accord_router = APIRouter(prefix="/api/v1/accord", tags=["accord"])
 
 
 # =========================================================================
 # Request Models
 # =========================================================================
 
-class CovenantBatchRequest(BaseModel):
+class AccordBatchRequest(BaseModel):
     events: List[Dict[str, Any]]
     batch_timestamp: str
     trace_level: str = "generic"
@@ -107,7 +107,7 @@ async def _verify_trace_signature(trace: Dict[str, Any], conn) -> Optional[str]:
 
     # Look up registered public key
     row = await conn.fetchrow(
-        "SELECT public_key_base64 FROM covenant_public_keys WHERE key_id = $1 AND algorithm = 'ed25519'",
+        "SELECT public_key_base64 FROM accord_public_keys WHERE key_id = $1 AND algorithm = 'ed25519'",
         key_id
     )
     if not row:
@@ -150,7 +150,7 @@ async def _verify_trace_signature(trace: Dict[str, Any], conn) -> Optional[str]:
 async def _is_key_registry_verified(key_id: str, conn) -> bool:
     """Check if a key has been verified against the registry."""
     row = await conn.fetchrow(
-        "SELECT registry_verified FROM covenant_public_keys WHERE key_id = $1",
+        "SELECT registry_verified FROM accord_public_keys WHERE key_id = $1",
         key_id
     )
     return bool(row and row["registry_verified"])
@@ -174,7 +174,7 @@ async def _optional_agent_token(
     return x_agent_token if token_row else None
 
 
-@covenant_router.post("/public-keys")
+@accord_router.post("/public-keys")
 async def register_public_key(
     request: PublicKeyRegistration,
     actor: Optional[str] = Depends(_optional_agent_token),
@@ -190,7 +190,7 @@ async def register_public_key(
     async with pool.acquire() as conn:
         # Check if already registered
         existing = await conn.fetchrow(
-            "SELECT key_id, registry_verified FROM covenant_public_keys WHERE key_id = $1",
+            "SELECT key_id, registry_verified FROM accord_public_keys WHERE key_id = $1",
             request.key_id
         )
         if existing:
@@ -227,7 +227,7 @@ async def register_public_key(
 
         await conn.execute(
             """
-            INSERT INTO covenant_public_keys
+            INSERT INTO accord_public_keys
                 (key_id, public_key_base64, algorithm, description, registered_by,
                  org_id, registry_verified, registry_status, registered_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -256,7 +256,7 @@ async def register_public_key(
     }
 
 
-@covenant_router.get("/public-keys")
+@accord_router.get("/public-keys")
 async def list_public_keys(
     actor: str = Depends(require_agent_token),
 ):
@@ -266,7 +266,7 @@ async def list_public_keys(
         rows = await conn.fetch(
             """SELECT key_id, algorithm, description, registered_by, org_id,
                       registry_verified, registry_status, registered_at
-               FROM covenant_public_keys ORDER BY registered_at DESC"""
+               FROM accord_public_keys ORDER BY registered_at DESC"""
         )
     return [
         {
@@ -283,7 +283,7 @@ async def list_public_keys(
     ]
 
 
-@covenant_router.post("/public-keys/{key_id}/reverify")
+@accord_router.post("/public-keys/{key_id}/reverify")
 async def reverify_public_key(
     key_id: str,
     actor: str = Depends(require_agent_token),
@@ -292,7 +292,7 @@ async def reverify_public_key(
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT public_key_base64, org_id FROM covenant_public_keys WHERE key_id = $1",
+            "SELECT public_key_base64, org_id FROM accord_public_keys WHERE key_id = $1",
             key_id
         )
         if not row:
@@ -305,7 +305,7 @@ async def reverify_public_key(
         registry_verified, registry_status = _verify_registry_key(org_id, key_id, public_key_base64)
 
         await conn.execute(
-            "UPDATE covenant_public_keys SET registry_verified = $1, registry_status = $2 WHERE key_id = $3",
+            "UPDATE accord_public_keys SET registry_verified = $1, registry_status = $2 WHERE key_id = $3",
             registry_verified, registry_status, key_id,
         )
 
@@ -323,7 +323,7 @@ class AdminKeyUpdate(BaseModel):
     registry_status: Optional[str] = None
 
 
-@covenant_router.patch(
+@accord_router.patch(
     "/public-keys/{key_id}",
     dependencies=[Depends(require_role(["admin"]))],
 )
@@ -331,11 +331,11 @@ async def admin_update_public_key(
     key_id: str,
     request: AdminKeyUpdate,
 ):
-    """Admin: update org_id, registry_verified, or registry_status on a covenant key."""
+    """Admin: update org_id, registry_verified, or registry_status on an accord key."""
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT key_id FROM covenant_public_keys WHERE key_id = $1", key_id
+            "SELECT key_id FROM accord_public_keys WHERE key_id = $1", key_id
         )
         if not row:
             raise HTTPException(status_code=404, detail="Key not found")
@@ -361,7 +361,7 @@ async def admin_update_public_key(
 
         params.append(key_id)
         await conn.execute(
-            f"UPDATE covenant_public_keys SET {', '.join(updates)} WHERE key_id = ${param_idx}",
+            f"UPDATE accord_public_keys SET {', '.join(updates)} WHERE key_id = ${param_idx}",
             *params,
         )
 
@@ -370,15 +370,15 @@ async def admin_update_public_key(
 
 
 # =========================================================================
-# Covenant Events (with signature verification)
+# Accord Events (with signature verification)
 # =========================================================================
 
-@covenant_router.post("/events")
-async def receive_covenant_events(
-    request: CovenantBatchRequest,
+@accord_router.post("/events")
+async def receive_accord_events(
+    request: AccordBatchRequest,
 ):
     """
-    Receive covenant trace events from agents in Lens batch format.
+    Receive accord trace events from agents in Lens batch format.
 
     Auth: Ed25519 signature verification — traces must be signed by an agent
     whose public key is registered in CIRISPortal (portal.ciris.ai) and
@@ -448,7 +448,7 @@ async def receive_covenant_events(
         for row in event_rows:
             await conn.execute(
                 """
-                INSERT INTO covenant_traces
+                INSERT INTO accord_traces
                     (id, agent_uid, trace_id, thought_id, task_id, trace_level,
                      trace_json, content_hash, signature_verified, signing_key_id, received_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -464,8 +464,8 @@ async def receive_covenant_events(
     }
 
 
-@covenant_router.get("/events")
-async def list_covenant_events(
+@accord_router.get("/events")
+async def list_accord_events(
     agent_uid: Optional[str] = None,
     trace_level: Optional[str] = None,
     verified_only: bool = False,
@@ -473,7 +473,7 @@ async def list_covenant_events(
     limit: int = 100,
     actor: str = Depends(require_agent_token),
 ):
-    """List covenant trace events with optional filtering."""
+    """List accord trace events with optional filtering."""
     pool = await get_pg_pool()
 
     # Build dynamic query with numbered params
@@ -481,8 +481,8 @@ async def list_covenant_events(
                       ct.trace_level, ct.trace_json, ct.content_hash,
                       ct.signature_verified, ct.signing_key_id, ct.received_at,
                       COALESCE(cpk.registry_verified, FALSE) as registry_verified
-               FROM covenant_traces ct
-               LEFT JOIN covenant_public_keys cpk ON ct.signing_key_id = cpk.key_id
+               FROM accord_traces ct
+               LEFT JOIN accord_public_keys cpk ON ct.signing_key_id = cpk.key_id
                WHERE 1=1"""
     params: list = []
     param_idx = 1

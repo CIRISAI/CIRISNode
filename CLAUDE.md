@@ -108,7 +108,7 @@ All tables in a single PostgreSQL database (async, via asyncpg pool). Migrations
 - `authority_profiles` — expertise, availability, notification config for wise authorities
 - `audit_logs` — immutable audit trail
 - `agent_tokens`, `agent_events`, `config`, `jobs`
-- `covenant_public_keys`, `covenant_traces`, `covenant_invocations`
+- `accord_public_keys`, `accord_traces`, `accord_invocations`
 
 ### Note: `tenant_tiers` table removed
 Tier/standing decisions now come exclusively from Portal API (`GET /api/v1/standing/{actor}`).
@@ -308,29 +308,29 @@ Agents authenticate with CIRISNode via Ed25519 signatures, NOT tokens:
 
 1. Signing keys generated at CIRISPortal (portal.ciris.ai) → stored in CIRISRegistry
 2. Private key downloaded once at generation, placed in agent's `data/agent_signing.key`
-3. Agent registers public key with CIRISNode at startup (`POST /api/v1/covenant/public-keys`)
+3. Agent registers public key with CIRISNode at startup (`POST /api/v1/accord/public-keys`)
 4. CIRISNode auto-discovers org_id via fingerprint lookup against Registry (`GetPublicKeys` with `ed25519_fingerprint`)
 5. All subsequent traces and deferrals carry inline Ed25519 signatures
 6. CIRISNode verifies each signature against the registered key
 
 **No org_id config needed on the agent** — CIRISNode computes SHA-256(public_key) and looks up the fingerprint in Registry to discover org_id and verification status automatically.
 
-**Key registration = covenant_metrics consent**: No separate consent flow needed.
+**Key registration = accord_metrics consent**: No separate consent flow needed.
 
 ### Agent Event Endpoints
 
 | Method | Endpoint | Auth | Purpose |
 |--------|----------|------|---------|
-| POST | `/api/v1/covenant/public-keys` | X-Agent-Token (optional) | Register agent signing key |
-| PATCH | `/api/v1/covenant/public-keys/{key_id}` | Admin JWT | Admin: update org_id, registry_verified, registry_status |
-| POST | `/api/v1/covenant/events` | Ed25519 inline signature | Batch covenant traces |
+| POST | `/api/v1/accord/public-keys` | X-Agent-Token (optional) | Register agent signing key |
+| PATCH | `/api/v1/accord/public-keys/{key_id}` | Admin JWT | Admin: update org_id, registry_verified, registry_status |
+| POST | `/api/v1/accord/events` | Ed25519 inline signature | Batch accord traces |
 | POST | `/api/v1/wbd/submit` | Ed25519 signature | Submit signed deferral |
 | GET | `/api/v1/wbd/tasks/{id}` | None | Poll deferral resolution |
 | POST | `/api/v1/agent/events` | X-Agent-Token | Post agent events |
 
 ### Admin Key Management
 
-The `PATCH /api/v1/covenant/public-keys/{key_id}` endpoint allows admins to override key verification status. Useful for QA and when the automatic Registry cross-validation path is not yet complete.
+The `PATCH /api/v1/accord/public-keys/{key_id}` endpoint allows admins to override key verification status. Useful for QA and when the automatic Registry cross-validation path is not yet complete.
 
 **Request body** (all fields optional):
 ```json
@@ -353,7 +353,7 @@ The CIRISNode admin UI is at **admin.ethicsengine.org** (NOT node.ciris.ai/docs)
 
 ### Trace Levels
 
-CIRISNode receives **full_traces** (via cirisnode adapter). CIRISLens receives **detailed** traces (via covenant_metrics adapter). These are separate concerns.
+CIRISNode receives **full_traces** (via cirisnode adapter). CIRISLens receives **detailed** traces (via accord_metrics adapter). These are separate concerns.
 
 ## Architecture
 
@@ -402,7 +402,7 @@ CIRISNode supports per-instance configuration via the singleton config table, ma
 - **Non-empty list** = only agents from listed orgs can register keys or submit WBD deferrals
 
 Enforcement points:
-- `POST /api/v1/covenant/public-keys` — rejects key registration from unlisted orgs
+- `POST /api/v1/accord/public-keys` — rejects key registration from unlisted orgs
 - `POST /api/v1/wbd/submit` (and `/api/v1/wa/submit`) — rejects deferrals from agents in unlisted orgs
 
 Org ID is discovered automatically via Registry fingerprint lookup (SHA-256 of Ed25519 public key).
@@ -461,9 +461,9 @@ CIRISNode has two independent logical domains, all in PostgreSQL:
 
 | Domain | Router Files | Key Tables |
 |--------|-------------|------------|
-| **Wise Authority** | `api/wa/`, `api/wbd/`, `api/admin/authority_routes.py` | `wbd_tasks`, `authority_profiles`, `covenant_public_keys` |
+| **Wise Authority** | `api/wa/`, `api/wbd/`, `api/admin/authority_routes.py` | `wbd_tasks`, `authority_profiles`, `accord_public_keys` |
 | **Benchmarking** | `api/benchmarks/`, `api/evaluations/`, `api/scores/`, `api/admin/frontier_routes.py` | `evaluations`, `frontier_models`, `agent_profiles` |
-| **Agent Infra** | `api/agent/`, `api/covenant/` | `agent_events`, `covenant_public_keys`, `covenant_traces` |
+| **Agent Infra** | `api/agent/`, `api/accord/` | `agent_events`, `accord_public_keys`, `accord_traces` |
 | **Shared** | `auth/`, `api/auth/`, `api/audit/`, `api/config/`, `api/health/` | `users`, `audit_logs` |
 
 No cross-domain data dependencies exist between WA and Benchmarking. Auth module (`cirisnode/auth/`) is the single source of truth for all JWT/role/agent-token validation.
