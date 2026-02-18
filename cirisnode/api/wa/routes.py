@@ -222,7 +222,14 @@ async def submit_wbd_task(request: WBDSubmitRequest):
     and cross-validated against CIRISRegistry. Unsigned submissions are rejected.
 
     Auto-routes to the best available Wise Authority based on domain expertise.
+
+    Node guards:
+    - Feature flag: wbd_routing must be enabled
+    - Org allowlist: agent's org_id must be in allowed_org_ids (if set)
     """
+    from cirisnode.guards import require_feature, check_org_allowed
+    await require_feature("wbd_routing")
+
     pool = await get_pg_pool()
     async with pool.acquire() as conn:
         # Signature-based auth: verify the deferral is signed by a registered agent
@@ -241,6 +248,13 @@ async def submit_wbd_task(request: WBDSubmitRequest):
                     f"Ensure the key is registered and verified via CIRISPortal/CIRISRegistry."
                 )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+        # Org allowlist check: look up org_id from the signing key
+        key_row = await conn.fetchrow(
+            "SELECT org_id FROM covenant_public_keys WHERE key_id = $1",
+            verified_key_id,
+        )
+        await check_org_allowed(key_row["org_id"] if key_row else None)
 
         try:
             task_id = uuid.uuid4().hex[:8]

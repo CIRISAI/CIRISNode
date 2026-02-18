@@ -19,6 +19,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/oversight", label: "Agent Oversight", roles: ["admin", "wise_authority"] },
   { href: "/audit", label: "Audit", roles: ["admin", "wise_authority"] },
   { href: "/system", label: "System", roles: ["admin"] },
+  { href: "/settings", label: "Settings", roles: ["admin"] },
   { href: "/users", label: "Users", roles: ["admin"] },
 ];
 

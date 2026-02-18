@@ -247,6 +247,7 @@ Located at `ui/`. Role-aware dashboard with page-level access control.
 | Agent Oversight | `/oversight` | Full | View + resolve assigned WBD |
 | Audit | `/audit` | Full | Read |
 | System | `/system` | Full | Hidden |
+| Settings | `/settings` | Full | Hidden |
 | Users | `/users` | Full | Hidden |
 
 ### Key UI Files
@@ -389,6 +390,70 @@ PostgreSQL                     |      (system of
 - **Tests require PostgreSQL** — `DATABASE_URL=postgresql://localhost/cirisnode_test`
 
 No API contract changes. All endpoints return the same shapes. Frontend services (ethicsengine-site, ethicsengine-portal, ethicsengine-portal-api) are unaffected.
+
+## Node Settings (Org Allowlist + Feature Flags)
+
+CIRISNode supports per-instance configuration via the singleton config table, managed through the admin UI Settings page or `POST /api/v1/config`.
+
+### Allowed Organizations
+
+`allowed_org_ids` controls which Registry/Portal org IDs this node will service:
+- **Empty list** (default) = open node, all orgs allowed
+- **Non-empty list** = only agents from listed orgs can register keys or submit WBD deferrals
+
+Enforcement points:
+- `POST /api/v1/covenant/public-keys` — rejects key registration from unlisted orgs
+- `POST /api/v1/wbd/submit` (and `/api/v1/wa/submit`) — rejects deferrals from agents in unlisted orgs
+
+Org ID is discovered automatically via Registry fingerprint lookup (SHA-256 of Ed25519 public key).
+
+### Feature Flags
+
+`features` controls which capabilities are active on this node instance:
+
+| Flag | Default | What it gates |
+|------|---------|---------------|
+| `wbd_routing` | `true` | WBD deferral submission (`/api/v1/wbd/submit`, `/api/v1/wa/submit`) |
+| `benchmarking` | `true` | Benchmark execution (`/api/v1/benchmarks/run`) |
+| `frontier_sweep` | `true` | Frontier sweep launch (`/api/v1/admin/frontier-sweep`) |
+
+Disabled features return HTTP 403 to callers.
+
+### Example Configurations
+
+**node.ciris.ai** (CIRIS org only, full features):
+```json
+{
+  "version": 1,
+  "allowed_org_ids": ["<ciris-org-uuid>"],
+  "features": { "wbd_routing": true, "benchmarking": true, "frontier_sweep": true }
+}
+```
+
+**ethicsengine.org** (public benchmarking node):
+```json
+{
+  "version": 1,
+  "allowed_org_ids": [],
+  "features": { "wbd_routing": false, "benchmarking": true, "frontier_sweep": true }
+}
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `cirisnode/schema/config_models.py` | `CIRISConfigV1`, `NodeFeaturesV1` Pydantic models |
+| `cirisnode/guards.py` | `check_org_allowed()`, `require_feature()` guard functions |
+| `cirisnode/dao/config_dao.py` | Config CRUD (singleton row in `config` table) |
+| `cirisnode/api/config/routes.py` | `GET/POST /api/v1/config` (admin-only) |
+| `ui/src/app/settings/page.tsx` | Admin UI for org allowlist + feature toggles |
+
+## Billing Model (Community Tier)
+
+Community agents pay $1.50 per agent identity ($0.50 issuance fee + $1.00 bond, max 5 keys). Paid tiers (Professional, Enterprise, Safety-Critical) are not yet available for self-service — contact sales@ciris.ai. WBD routing via node.ciris.ai will be an additional charge for community agents in a future release.
+
+All billing is handled by CIRISPortal + Stripe. CIRISNode does NOT process payments.
 
 ## Domain Separation
 

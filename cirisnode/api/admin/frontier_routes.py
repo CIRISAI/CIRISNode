@@ -487,6 +487,8 @@ async def launch_frontier_sweep(body: FrontierSweepRequest):
     Always runs full HE-300 (300 scenarios). Smaller test runs should use
     the agentbeats/run endpoint as client evals.
     """
+    from cirisnode.guards import require_feature
+    await require_feature("frontier_sweep")
     api_keys = _load_api_keys()
     if not api_keys:
         raise HTTPException(

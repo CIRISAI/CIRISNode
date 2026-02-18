@@ -33,6 +33,8 @@ simplebench_jobs: Dict[str, Dict[str, Any]] = {}
 
 @benchmarks_router.post("/run")
 async def run_benchmark(request: Request, actor: str = Depends(require_auth)):
+    from cirisnode.guards import require_feature
+    await require_feature("benchmarking")
     """
     Start an HE-300 benchmark job. Requires authentication.
 

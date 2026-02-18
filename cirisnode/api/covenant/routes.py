@@ -213,6 +213,11 @@ async def register_public_key(
         )
         # Use discovered org_id if agent didn't provide one
         effective_org_id = request.org_id or discovered_org_id or ""
+
+        # Org allowlist: reject keys from orgs not serviced by this node
+        from cirisnode.guards import check_org_allowed
+        await check_org_allowed(effective_org_id or None)
+
         logger.info(
             f"Registry validation for key_id={request.key_id} org_id={effective_org_id}: "
             f"verified={registry_verified} reason={registry_status}"
