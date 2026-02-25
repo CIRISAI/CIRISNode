@@ -21,6 +21,9 @@ from cirisnode.api.wa.routes import wa_router
 from cirisnode.api.wbd.routes import wbd_router
 from cirisnode.api.admin.authority_routes import authority_router
 
+# ── Agent Profiles (saved agent configurations) ──
+from cirisnode.api.agent_profiles.routes import agent_profiles_router
+
 # ── Benchmarking (eval execution, scores, leaderboard, frontier sweep) ──
 from cirisnode.api.benchmarks.routes import simplebench_router, benchmarks_router
 from cirisnode.api.scores.routes import scores_router
@@ -123,6 +126,9 @@ app.include_router(a2a_router)          # /a2a JSON-RPC
 app.include_router(wa_router)
 app.include_router(wbd_router)
 app.include_router(authority_router)    # /api/v1/admin/authorities CRUD
+
+# ── Agent Profiles (saved agent configurations) ──
+app.include_router(agent_profiles_router)
 
 # ── Benchmarking (eval execution, scores, leaderboard, frontier sweep) ──
 app.include_router(simplebench_router)
