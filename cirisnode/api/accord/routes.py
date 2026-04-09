@@ -194,10 +194,14 @@ async def register_public_key(
             request.key_id
         )
         if existing:
+            # Include supported_domains from node config
+            from cirisnode.dao.config_dao import get_config
+            config = await get_config()
             return {
                 "status": "already_registered",
                 "key_id": request.key_id,
                 "registry_verified": bool(existing["registry_verified"]),
+                "supported_domains": config.supported_domains,
             }
 
         # Validate the key is valid Ed25519
@@ -243,6 +247,10 @@ async def register_public_key(
             datetime.datetime.now(datetime.timezone.utc),
         )
 
+    # Get supported_domains from node config
+    from cirisnode.dao.config_dao import get_config
+    config = await get_config()
+
     logger.info(
         f"Public key registered: key_id={request.key_id} by={registered_by} "
         f"org_id={effective_org_id} registry_verified={registry_verified}"
@@ -253,6 +261,7 @@ async def register_public_key(
         "org_id": effective_org_id,
         "registry_verified": registry_verified,
         "registry_status": registry_status,
+        "supported_domains": config.supported_domains,
     }
 
 

@@ -51,3 +51,54 @@ async def require_feature(feature_name: str) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Feature '{feature_name}' is not enabled on this node.",
         )
+
+
+async def check_domain_supported(domain_hint: str | None) -> None:
+    """Raise 403 if domain_hint is not supported by this node.
+
+    Domain routing logic:
+    - If domain_hint is None or empty: always accepted (general deferral)
+    - If domain_hint is "GENERAL": always accepted
+    - If domain_hint is a specialized domain (MEDICAL, FINANCIAL, etc.):
+      - Accept if node's supported_domains includes this domain
+      - Reject otherwise
+
+    Empty supported_domains means the node only handles general deferrals.
+    """
+    # General deferrals (no domain_hint) are always accepted
+    if not domain_hint or domain_hint == "GENERAL":
+        return
+
+    config = await get_config()
+
+    # If node has no specialized domains configured, reject specialized deferrals
+    if not config.supported_domains:
+        logger.warning(
+            "Domain %s rejected — node only handles general deferrals (no supported_domains configured)",
+            domain_hint,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "domain_not_supported",
+                "domain": domain_hint,
+                "message": f"This node does not handle {domain_hint} deferrals. It only accepts general deferrals.",
+            },
+        )
+
+    # Check if the domain is in the node's supported list
+    if domain_hint not in config.supported_domains:
+        logger.warning(
+            "Domain %s rejected — not in supported list: %s",
+            domain_hint,
+            config.supported_domains,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "domain_not_supported",
+                "domain": domain_hint,
+                "supported_domains": config.supported_domains,
+                "message": f"This node does not handle {domain_hint} deferrals.",
+            },
+        )

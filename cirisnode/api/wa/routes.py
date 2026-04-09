@@ -227,8 +227,9 @@ async def submit_wbd_task(request: WBDSubmitRequest):
     - Feature flag: wbd_routing must be enabled
     - Org allowlist: agent's org_id must be in allowed_org_ids (if set)
     """
-    from cirisnode.guards import require_feature, check_org_allowed
+    from cirisnode.guards import require_feature, check_org_allowed, check_domain_supported
     await require_feature("wbd_routing")
+    await check_domain_supported(request.domain_hint)
 
     pool = await get_pg_pool()
     async with pool.acquire() as conn:

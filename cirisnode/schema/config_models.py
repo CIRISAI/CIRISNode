@@ -40,3 +40,7 @@ class CIRISConfigV1(BaseModel):
     allowed_org_ids: list[str] = []
     """Registry/Portal org IDs this node will service. Empty list = allow all."""
     features: NodeFeaturesV1 = NodeFeaturesV1()
+    supported_domains: list[str] = []
+    """Domain categories this node is licensed to handle (e.g., MEDICAL, FINANCIAL).
+    Empty list = general-purpose only (accepts deferrals without domain_hint).
+    Valid values: GENERAL, MEDICAL, FINANCIAL, LEGAL, TECHNICAL, EDUCATIONAL, CREATIVE, RESEARCH."""

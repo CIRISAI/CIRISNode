@@ -17,7 +17,18 @@ interface NodeConfig {
   llm: { api_base: string | null; model_name: string | null };
   allowed_org_ids: string[];
   features: NodeFeatures;
+  supported_domains: string[];
 }
+
+const DOMAIN_CATEGORIES = [
+  { value: "MEDICAL", label: "Medical", desc: "Healthcare, clinical, pharmaceutical" },
+  { value: "FINANCIAL", label: "Financial", desc: "Banking, investments, insurance" },
+  { value: "LEGAL", label: "Legal", desc: "Law, compliance, contracts" },
+  { value: "TECHNICAL", label: "Technical", desc: "Engineering, IT, infrastructure" },
+  { value: "EDUCATIONAL", label: "Educational", desc: "Teaching, training, academia" },
+  { value: "CREATIVE", label: "Creative", desc: "Art, design, content creation" },
+  { value: "RESEARCH", label: "Research", desc: "Scientific, academic research" },
+] as const;
 
 export default function SettingsPage() {
   return (
@@ -107,6 +118,18 @@ function SettingsContent() {
     saveConfig(updated);
   };
 
+  const toggleDomain = (domain: string) => {
+    if (!config) return;
+    const domains = config.supported_domains || [];
+    const updated = {
+      ...config,
+      supported_domains: domains.includes(domain)
+        ? domains.filter((d) => d !== domain)
+        : [...domains, domain],
+    };
+    saveConfig(updated);
+  };
+
   if (loading) {
     return (
       <div className="text-center py-12 text-gray-500">
@@ -184,6 +207,54 @@ function SettingsContent() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Supported Domains */}
+      <div className="bg-white shadow rounded-lg p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-1">
+          Supported Domains
+        </h3>
+        <p className="text-sm text-gray-500 mb-4">
+          Domain categories this node is licensed to handle. If none selected,
+          node only accepts general deferrals (no domain_hint). Agents filter
+          deferrals by domain before sending.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {DOMAIN_CATEGORIES.map(({ value, label, desc }) => {
+            const isSelected = config?.supported_domains?.includes(value) || false;
+            return (
+              <div
+                key={value}
+                className={`flex items-center justify-between border rounded p-3 cursor-pointer transition-colors ${
+                  isSelected
+                    ? "border-indigo-500 bg-indigo-50"
+                    : "border-gray-200 hover:border-gray-300"
+                }`}
+                onClick={() => toggleDomain(value)}
+              >
+                <div>
+                  <span className="font-medium text-gray-900">{label}</span>
+                  <p className="text-sm text-gray-500">{desc}</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleDomain(value)}
+                  disabled={saving}
+                  className="h-4 w-4 text-indigo-600 border-gray-300 rounded"
+                />
+              </div>
+            );
+          })}
+        </div>
+        {(!config?.supported_domains || config.supported_domains.length === 0) && (
+          <div className="bg-amber-50 border border-amber-200 rounded p-3 mt-4">
+            <p className="text-sm text-amber-800">
+              No specialized domains configured &mdash; this node only accepts
+              general deferrals (deferrals without a domain_hint).
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Allowed Org IDs */}
