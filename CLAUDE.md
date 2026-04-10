@@ -419,23 +419,68 @@ Org ID is discovered automatically via Registry fingerprint lookup (SHA-256 of E
 
 Disabled features return HTTP 403 to callers.
 
+### Supported Domains (Domain-Aware Deferral Routing)
+
+`supported_domains` controls which specialized domain categories this node is licensed to handle:
+
+| Domain | Description |
+|--------|-------------|
+| `GENERAL` | General-purpose (always accepted, no special licensing) |
+| `MEDICAL` | Healthcare, clinical, pharmaceutical |
+| `FINANCIAL` | Banking, investments, insurance |
+| `LEGAL` | Law, compliance, contracts |
+| `TECHNICAL` | Engineering, IT, infrastructure |
+| `EDUCATIONAL` | Teaching, training, academia |
+| `CREATIVE` | Art, design, content creation |
+| `RESEARCH` | Scientific, academic research |
+
+**Routing logic** (enforced by `check_domain_supported()` guard):
+- **No domain_hint or "GENERAL"**: Always accepted by any node
+- **Specialized domain + empty `supported_domains`**: Rejected (node is general-purpose only)
+- **Specialized domain in `supported_domains`**: Accepted
+- **Specialized domain not in `supported_domains`**: Rejected with error details
+
+**Agent-side filtering**: CIRISAgent filters deferrals by `domain_hint` before sending. Only nodes with the matching domain in `supported_domains` receive specialized deferrals. The `POST /api/v1/accord/public-keys` response includes `supported_domains` so agents know which domains the node handles.
+
+**Error response** (HTTP 403):
+```json
+{
+  "error": "domain_not_supported",
+  "domain": "MEDICAL",
+  "supported_domains": ["FINANCIAL", "LEGAL"],
+  "message": "This node does not handle MEDICAL deferrals."
+}
+```
+
 ### Example Configurations
 
-**node.ciris.ai** (CIRIS org only, full features):
+**node.ciris.ai** (CIRIS org only, full features, all domains):
 ```json
 {
   "version": 1,
   "allowed_org_ids": ["<ciris-org-uuid>"],
-  "features": { "wbd_routing": true, "benchmarking": true, "frontier_sweep": true }
+  "features": { "wbd_routing": true, "benchmarking": true, "frontier_sweep": true },
+  "supported_domains": ["MEDICAL", "FINANCIAL", "LEGAL", "TECHNICAL", "EDUCATIONAL", "CREATIVE", "RESEARCH"]
 }
 ```
 
-**ethicsengine.org** (public benchmarking node):
+**ethicsengine.org** (public benchmarking node, no WBD):
 ```json
 {
   "version": 1,
   "allowed_org_ids": [],
-  "features": { "wbd_routing": false, "benchmarking": true, "frontier_sweep": true }
+  "features": { "wbd_routing": false, "benchmarking": true, "frontier_sweep": true },
+  "supported_domains": []
+}
+```
+
+**medical-wa.ciris.ai** (specialized medical WBD node):
+```json
+{
+  "version": 1,
+  "allowed_org_ids": ["<healthcare-org-uuid>"],
+  "features": { "wbd_routing": true, "benchmarking": false, "frontier_sweep": false },
+  "supported_domains": ["MEDICAL"]
 }
 ```
 
@@ -444,10 +489,10 @@ Disabled features return HTTP 403 to callers.
 | File | Purpose |
 |------|---------|
 | `cirisnode/schema/config_models.py` | `CIRISConfigV1`, `NodeFeaturesV1` Pydantic models |
-| `cirisnode/guards.py` | `check_org_allowed()`, `require_feature()` guard functions |
+| `cirisnode/guards.py` | `check_org_allowed()`, `require_feature()`, `check_domain_supported()` guard functions |
 | `cirisnode/dao/config_dao.py` | Config CRUD (singleton row in `config` table) |
 | `cirisnode/api/config/routes.py` | `GET/POST /api/v1/config` (admin-only) |
-| `ui/src/app/settings/page.tsx` | Admin UI for org allowlist + feature toggles |
+| `ui/src/app/settings/page.tsx` | Admin UI for org allowlist, feature toggles, and supported domains |
 
 ## Billing Model (Community Tier)
 
