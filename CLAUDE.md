@@ -119,6 +119,31 @@ Tier/standing decisions now come exclusively from Portal API (`GET /api/v1/stand
 - **Serves to**: ethicsengine-site (evaluation data, scores, usage)
 - **Does NOT call**: Stripe directly (all billing via Portal API)
 
+## What Serves What (verified 2026-09-25)
+
+Hostnames are easy to get wrong here — several docs called `node.ciris.ai` "the API". It is not.
+
+| Hostname | What it is | Where it runs | Repo / deploy |
+|---|---|---|---|
+| `api.ethicsengine.org` | **This API** (public). Two A records: `207.148.13.157` (Vultr, US) + `91.99.150.121` (Hetzner, EU). Not Cloudflare-proxied; Caddy → `ciris-node` | VPS | this repo → GHCR → Watchtower |
+| `node.ciris-services-1.ai` | This API, private node (`node_servers` stack). Two A records: `207.148.15.107` + `142.132.232.203` | VPS | same image |
+| `node.ciris.ai` | The **admin UI** (`ui/`, Worker `cirisnode-ui`). Every path 307s to `/login`. Calls `node.ciris-services-1.ai` | Cloudflare account `alignordie@gmail.com` | `ui/wrangler.toml` — deploy only from that account |
+| `admin.ethicsengine.org` | A second build of the same admin UI (Worker `ethicsengine-admin`) | Cloudflare account `mooreericnyc@gmail.com` | — (retire one of the two; see #38) |
+| `ethicsengine.org` | Public site (Worker `ethicsengine-site`); client calls `api.ethicsengine.org` directly | Cloudflare `mooreericnyc` | `emooreatx/ethicsengine_site`, manual `wrangler deploy` |
+| `portal.ethicsengine.org` / `api.portal.ethicsengine.org` | EthicsEngine Portal (billing, Stripe) — the `PORTAL_API_URL` this API calls for standing | Worker / VPS `207.148.13.157` | `emooreatx/ethicsengine-portal{,-api}` |
+| `portal.ciris.ai` → `portal.ciris-services-1.ai` | **CIRISPortal** (agent identity, key custody) — a different product from the Portal API above | VPS `207.148.13.157` | `CIRISAI/CIRISPortal` |
+| `registry.ciris-services-1.ai` | CIRISRegistry (v3, Spock cluster). `api.registry.ciris.ai` **does not exist** | VPS | `CIRISAI/CIRISRegistry` |
+| `agents.ciris-services-1.ai` | CIRIS **Billing** API (despite the name) | VPS `108.61.242.236` | `CIRISAI/CIRISBilling` |
+
+**Database.** The `ethicsengine_servers` origins (`api.ethicsengine.org`) share **one** `cirisnode` database on the US
+host over TLS since 2026-09-25 (CIRISCore#2); the EU copy is frozen as `cirisnode_eu_frozen_20260924`. The
+`node_servers` origins each have their own DB. Schema for the shared tables is owned by **this repo's migrator**
+(`cirisnode/db/migrations`); CIRISBench must not migrate them (CIRISBench#8/#9).
+
+**Probing.** Because `api.ethicsengine.org` has two unproxied A records, always check both origins:
+`curl --resolve api.ethicsengine.org:443:<ip> https://api.ethicsengine.org/api/v1/scores`. Identical `/health` on
+both proved nothing for seven months while one served an empty scores list (#35).
+
 ## NOT Responsible For
 
 - Stripe SDK calls or customer management (that's Portal API)
@@ -189,17 +214,17 @@ Only providers with registered models need keys. Provider matching is case-insen
 ADMIN_JWT=$(python3 -c "import jwt,time; print(jwt.encode({'sub':'admin@ciris.ai','role':'admin','iat':int(time.time()),'exp':int(time.time())+3600}, '$JWT_SECRET', algorithm='HS256'))")
 
 # 2. Register models (one-time)
-curl -X POST https://node.ciris.ai/api/v1/admin/frontier-models \
+curl -X POST https://api.ethicsengine.org/api/v1/admin/frontier-models \
   -H "Authorization: Bearer $ADMIN_JWT" -H "Content-Type: application/json" \
   -d '{"model_id":"gpt-4o","display_name":"GPT-4o","provider":"OpenAI","api_base_url":"https://api.openai.com/v1","default_model_name":"gpt-4o"}'
 
 # 3. Launch sweep
-curl -X POST https://node.ciris.ai/api/v1/admin/frontier-sweep \
+curl -X POST https://api.ethicsengine.org/api/v1/admin/frontier-sweep \
   -H "Authorization: Bearer $ADMIN_JWT" -H "Content-Type: application/json" \
   -d '{"concurrency":50}'
 
 # 4. Check progress
-curl https://node.ciris.ai/api/v1/admin/frontier-sweep/sweep-abc12345 \
+curl https://api.ethicsengine.org/api/v1/admin/frontier-sweep/sweep-abc12345 \
   -H "Authorization: Bearer $ADMIN_JWT"
 ```
 
@@ -367,7 +392,7 @@ ethicsengine-site           ethicsengine-portal
   | (all API calls)                | (all API calls)
   v                                v
 CIRISNode  <-- YOU ARE HERE  ethicsengine-portal-api
-(node.ciris.ai)             (api.portal.ethicsengine.org)
+(api.ethicsengine.org)      (api.portal.ethicsengine.org)
   |    |                       |           |
   |    | GET /standing/{actor} |           |
   |    +---------------------> |           |
@@ -454,7 +479,7 @@ Disabled features return HTTP 403 to callers.
 
 ### Example Configurations
 
-**node.ciris.ai** (CIRIS org only, full features, all domains):
+**Private node** (served at `node.ciris-services-1.ai`; CIRIS org only, full features, all domains):
 ```json
 {
   "version": 1,
