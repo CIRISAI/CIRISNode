@@ -8,8 +8,31 @@ from functools import lru_cache
 logger = logging.getLogger(__name__)
 
 # --- Constants ---
-# Path to EEE datasets (when using volume mount)
-EEE_DATASETS_PATH = os.environ.get("EEE_DATASETS_PATH", "./eee/datasets/ethics")
+# Optional override: a volume-mounted copy of the Hendrycks ETHICS test CSVs in the
+# legacy per-category layout (commonsense/cm_test.csv, deontology/…, justice/…, virtue/…).
+# When unset (the normal case) scenarios come from the CSVs packaged with CIRISNode via
+# cirisnode.benchmark.loader — the same files, checksums and framing the frontier sweep
+# uses. There is deliberately no bogus default path here: the old default
+# "./eee/datasets/ethics" never existed in the image, so every caller silently got the
+# 3-item fallback below (CIRISNode#32).
+EEE_DATASETS_PATH = os.environ.get("EEE_DATASETS_PATH") or None
+
+# Set ALLOW_FALLBACK_SCENARIOS=true to permit the 3-item placeholder set when no dataset
+# can be loaded. Never set this in production: it makes a "benchmark" out of 3 prompts.
+ALLOW_FALLBACK_SCENARIOS = os.environ.get("ALLOW_FALLBACK_SCENARIOS", "").lower() in ("1", "true", "yes")
+
+# Human-readable principle label per category (kept for API compatibility).
+HE300_PRINCIPLES = {
+    "commonsense": "Commonsense Ethics",
+    "commonsense_hard": "Commonsense Ethics (Hard)",
+    "deontology": "Deontological Ethics",
+    "justice": "Justice",
+    "virtue": "Virtue Ethics",
+}
+
+
+class HE300DataUnavailable(RuntimeError):
+    """Raised when no HE-300 scenarios can be loaded and fallback is not allowed."""
 
 # Category mapping for HE-300
 HE300_CATEGORIES = {
@@ -151,41 +174,83 @@ def _load_virtue_csv(file_path: str) -> List[Dict[str, Any]]:
     return scenarios
 
 
-@lru_cache(maxsize=1)
-def _load_all_he300_from_disk() -> List[Dict[str, Any]]:
-    """
-    Load all HE-300 scenarios from EEE datasets on disk.
-    Results are cached for performance.
-    """
-    all_scenarios = []
-    base_path = EEE_DATASETS_PATH
-    
-    if not os.path.isdir(base_path):
-        logger.warning(f"EEE datasets path not found: {base_path}")
-        return []
-    
-    # Load commonsense
+def _load_from_legacy_layout(base_path: str) -> List[Dict[str, Any]]:
+    """Load from a volume-mounted copy in the legacy per-category directory layout."""
+    all_scenarios: List[Dict[str, Any]] = []
     cm_path = os.path.join(base_path, "commonsense", "cm_test.csv")
     if os.path.exists(cm_path):
         all_scenarios.extend(_load_commonsense_csv(cm_path, "HE-CM"))
-    
-    # Load deontology
     de_path = os.path.join(base_path, "deontology", "deontology_test.csv")
     if os.path.exists(de_path):
         all_scenarios.extend(_load_deontology_csv(de_path))
-    
-    # Load justice
     ju_path = os.path.join(base_path, "justice", "justice_test.csv")
     if os.path.exists(ju_path):
         all_scenarios.extend(_load_justice_csv(ju_path))
-    
-    # Load virtue
     vi_path = os.path.join(base_path, "virtue", "virtue_test.csv")
     if os.path.exists(vi_path):
         all_scenarios.extend(_load_virtue_csv(vi_path))
-    
-    logger.info(f"Loaded {len(all_scenarios)} HE-300 scenarios from disk")
+    logger.info("Loaded %d HE-300 scenarios from EEE_DATASETS_PATH=%s", len(all_scenarios), base_path)
     return all_scenarios
+
+
+def _load_from_package() -> List[Dict[str, Any]]:
+    """Load every scenario from the CSVs packaged with CIRISNode.
+
+    Delegates to cirisnode.benchmark.loader so this path and the frontier sweep read
+    the same files with the same framing. Returns the legacy dict shape.
+    """
+    from cirisnode.benchmark.loader import CATEGORY_CONFIG, _load_category
+
+    all_scenarios: List[Dict[str, Any]] = []
+    for category in CATEGORY_CONFIG:
+        try:
+            for sc in _load_category(category):
+                all_scenarios.append({
+                    "id": sc.scenario_id,
+                    "prompt": sc.input_text,
+                    "expected_label": sc.expected_label,
+                    "category": sc.category,
+                    "principle": HE300_PRINCIPLES.get(sc.category, sc.category.title()),
+                })
+        except FileNotFoundError as e:
+            logger.error("Packaged HE-300 dataset missing: %s", e)
+    logger.info("Loaded %d HE-300 scenarios from packaged datasets", len(all_scenarios))
+    return all_scenarios
+
+
+def he300_data_source() -> str:
+    """Which source load_he300_data() will read from."""
+    if EEE_DATASETS_PATH and os.path.isdir(EEE_DATASETS_PATH):
+        return "eee_datasets_path"
+    return "package"
+
+
+@lru_cache(maxsize=1)
+def _load_all_he300_from_disk() -> List[Dict[str, Any]]:
+    """Load all HE-300 scenarios. Cached for the life of the process."""
+    if EEE_DATASETS_PATH:
+        if os.path.isdir(EEE_DATASETS_PATH):
+            scenarios = _load_from_legacy_layout(EEE_DATASETS_PATH)
+            if scenarios:
+                return scenarios
+            logger.error("EEE_DATASETS_PATH=%s is set but contains no loadable CSVs; "
+                         "falling back to packaged datasets", EEE_DATASETS_PATH)
+        else:
+            logger.error("EEE_DATASETS_PATH=%s is set but does not exist; "
+                         "falling back to packaged datasets", EEE_DATASETS_PATH)
+    return _load_from_package()
+
+
+def _fallback_or_raise(context: str) -> List[Dict[str, Any]]:
+    if ALLOW_FALLBACK_SCENARIOS:
+        logger.error("HE-300: no dataset available (%s); ALLOW_FALLBACK_SCENARIOS is set, "
+                     "returning the 3-item placeholder set. THIS IS NOT A BENCHMARK.", context)
+        return _get_fallback_he300_data()
+    raise HE300DataUnavailable(
+        f"No HE-300 scenarios could be loaded ({context}). The packaged datasets under "
+        f"cirisnode/benchmark/datasets/ethics are missing or unreadable, and "
+        f"EEE_DATASETS_PATH={EEE_DATASETS_PATH!r} did not supply any."
+    )
 
 
 def _get_fallback_he300_data() -> List[Dict[str, Any]]:
@@ -223,9 +288,11 @@ def load_he300_data(
     """
     Load HE-300 scenarios from EthicsEngine Enterprise datasets.
     
-    Attempts to load from:
-    1. Local EEE dataset files (via volume mount)
-    2. Fallback to hardcoded sample data
+    Sources, in order:
+    1. EEE_DATASETS_PATH, if set and present (legacy volume-mount layout)
+    2. The CSVs packaged with CIRISNode (cirisnode/benchmark/datasets/ethics)
+    Raises HE300DataUnavailable if neither yields scenarios, unless
+    ALLOW_FALLBACK_SCENARIOS=true (test/dev only).
     
     Args:
         category: Filter by category (commonsense, deontology, justice, virtue)
@@ -235,13 +302,9 @@ def load_he300_data(
     Returns:
         List of scenario dictionaries with id, prompt, expected_label, category, principle
     """
-    # Try loading from disk first
     scenarios = _load_all_he300_from_disk()
-    
-    # Use fallback if no real data
     if not scenarios:
-        logger.warning("No HE-300 data from disk, using fallback data")
-        scenarios = _get_fallback_he300_data()
+        scenarios = _fallback_or_raise("load_he300_data")
     
     # Filter by category if specified
     if category:
@@ -312,8 +375,7 @@ def sample_he300_scenarios(
     
     all_scenarios = _load_all_he300_from_disk()
     if not all_scenarios:
-        logger.warning("No scenarios available for sampling, using fallback")
-        return _get_fallback_he300_data()
+        return _fallback_or_raise("sample_he300_scenarios")
     
     # Group by category
     by_category: Dict[str, List[Dict[str, Any]]] = {}

@@ -6,6 +6,7 @@ Includes integration with EthicsEngine Enterprise when enabled.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi.responses import JSONResponse
 from cirisnode.config import settings
 from cirisnode.auth.dependencies import require_auth
 import json
@@ -23,10 +24,36 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 benchmarks_router = APIRouter(prefix="/api/v1/benchmarks", tags=["benchmarks"])
 simplebench_router = APIRouter(prefix="/api/v1/simplebench", tags=["simplebench"])
 
-# In-memory job store for demonstration
-# In production, use Redis or PostgreSQL
-benchmark_jobs: Dict[str, Dict[str, Any]] = {}
+# Job store. The API runs under `uvicorn --workers 4`; a per-process dict meant
+# /status/{job_id} 404'd on three workers out of four (CIRISNode#33). Jobs live in
+# Redis (shared with the Celery workers) with a 7-day TTL; the dict is only a
+# last-resort fallback when Redis is unreachable, and is logged as such.
+JOB_TTL_SECONDS = 7 * 24 * 3600
+_JOB_KEY = "benchjob:{job_id}"
+_local_jobs: Dict[str, Dict[str, Any]] = {}
 simplebench_jobs: Dict[str, Dict[str, Any]] = {}
+
+
+async def _job_set(job_id: str, data: Dict[str, Any]) -> None:
+    try:
+        from cirisnode.utils.redis_cache import get_redis
+        r = await get_redis()
+        await r.set(_JOB_KEY.format(job_id=job_id), json.dumps(data, default=str), ex=JOB_TTL_SECONDS)
+    except Exception as e:  # pragma: no cover - depends on infra
+        logger.warning("Redis unavailable for job %s (%s); using process-local store", job_id, e)
+        _local_jobs[job_id] = data
+
+
+async def _job_get(job_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        from cirisnode.utils.redis_cache import get_redis
+        r = await get_redis()
+        raw = await r.get(_JOB_KEY.format(job_id=job_id))
+        if raw is not None:
+            return json.loads(raw)
+    except Exception as e:  # pragma: no cover - depends on infra
+        logger.warning("Redis unavailable reading job %s (%s); trying process-local store", job_id, e)
+    return _local_jobs.get(job_id)
 
 
 # --- HE-300 Benchmark Endpoints ---
@@ -38,8 +65,8 @@ async def run_benchmark(request: Request, actor: str = Depends(require_auth)):
     """
     Start an HE-300 benchmark job. Requires authentication.
 
-    When EEE_ENABLED=true, this will submit scenarios to EthicsEngine Enterprise
-    for evaluation. Otherwise, returns mock results.
+    When EEE_ENABLED=true, scenarios are queued to the Celery worker for evaluation.
+    Otherwise the request is refused with 503 benchmark_execution_disabled.
 
     Request body:
         - benchmark_type: "he300" (optional, defaults to he300)
@@ -67,55 +94,47 @@ async def run_benchmark(request: Request, actor: str = Depends(require_auth)):
     if scenario_id and scenario_id not in scenario_ids:
         scenario_ids.append(scenario_id)
     
-    # Check if EEE integration is enabled
-    if settings.EEE_ENABLED:
-        # Queue async job via Celery
-        try:
-            from cirisnode.celery_tasks import run_he300_scenario_task
-            
-            run_he300_scenario_task(
-                job_id=job_id,
-                scenario_ids=scenario_ids if scenario_ids else None,
-                category=category,
-                n_scenarios=n_scenarios,
-            )
-            
-            # Store job metadata
-            benchmark_jobs[job_id] = {
-                "status": "pending",
-                "created_at": datetime.utcnow().isoformat(),
-                "benchmark_type": benchmark_type,
-                "scenario_ids": scenario_ids,
-                "category": category,
-                "eee_enabled": True,
-            }
-            
-            logger.info(f"Queued HE-300 benchmark job {job_id} via EEE")
-            
-        except Exception:
-            logger.exception("Failed to queue benchmark job")
-            raise HTTPException(status_code=500, detail="Internal server error")
-    else:
-        # Fallback: Return mock results immediately (for testing without EEE)
-        logger.warning(f"EEE disabled, returning mock results for job {job_id}")
-        
-        benchmark_jobs[job_id] = {
-            "status": "completed",
-            "created_at": datetime.utcnow().isoformat(),
-            "benchmark_type": benchmark_type,
-            "scenario_ids": scenario_ids,
-            "result": {
-                "summary": {
-                    "total": n_scenarios,
-                    "correct": int(n_scenarios * 0.85),
-                    "accuracy": 0.85,
-                    "by_category": {},
-                },
-                "signature": "mock-signature-eee-disabled",
+    # Benchmark execution on this node is only available through the Celery path.
+    # When it is disabled we say so — we never return synthetic results from a
+    # production route (CIRISNode#33). This runs before anything is recorded so a
+    # refused call consumes no quota.
+    if not settings.EEE_ENABLED:
+        logger.info("Benchmark run refused: execution disabled on this node (actor=%s)", actor)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "benchmark_execution_disabled",
+                "message": (
+                    "Benchmark execution is not enabled on this node. Frontier scores are "
+                    "available at /api/v1/scores; contact the operator to enable runs."
+                ),
             },
-            "eee_enabled": False,
-        }
-    
+        )
+
+    try:
+        from cirisnode.celery_tasks import run_he300_scenario_task
+
+        run_he300_scenario_task(
+            job_id=job_id,
+            scenario_ids=scenario_ids if scenario_ids else None,
+            category=category,
+            n_scenarios=n_scenarios,
+        )
+    except Exception:
+        logger.exception("Failed to queue benchmark job")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    await _job_set(job_id, {
+        "status": "pending",
+        "created_at": datetime.utcnow().isoformat(),
+        "benchmark_type": benchmark_type,
+        "scenario_ids": scenario_ids,
+        "category": category,
+        "actor": actor,
+        "eee_enabled": True,
+    })
+    logger.info("Queued HE-300 benchmark job %s", job_id)
+
     return {"job_id": job_id}
 
 
@@ -129,10 +148,10 @@ async def get_benchmark_status(job_id: str):
         - created_at: When job was created
         - progress: Optional progress information
     """
-    job = benchmark_jobs.get(job_id)
+    job = await _job_get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Benchmark job not found")
-    
+
     return {
         "job_id": job_id,
         "status": job.get("status", "unknown"),
@@ -150,10 +169,10 @@ async def get_benchmark_results(job_id: str):
         - result: Contains summary statistics and signature
         - results: Individual scenario results (if available)
     """
-    job = benchmark_jobs.get(job_id)
+    job = await _job_get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Benchmark job not found")
-    
+
     if job.get("status") == "pending":
         raise HTTPException(status_code=202, detail="Job still pending")
     
@@ -185,14 +204,17 @@ async def list_he300_scenarios(
     When EEE_ENABLED=true, fetches from EthicsEngine Enterprise.
     Otherwise, returns locally available scenarios.
     """
-    from cirisnode.utils.data_loaders import load_he300_data
-    
-    scenarios = load_he300_data(category=category, limit=limit)
-    
+    from cirisnode.utils.data_loaders import HE300DataUnavailable, he300_data_source, load_he300_data
+
+    try:
+        scenarios = load_he300_data(category=category, limit=limit)
+    except HE300DataUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
     return {
         "total": len(scenarios),
         "scenarios": scenarios,
-        "source": "eee" if settings.EEE_ENABLED else "local",
+        "source": he300_data_source(),
     }
 
 
@@ -205,23 +227,34 @@ async def he300_health():
         - EEE connectivity (if enabled)
         - Local data availability
     """
-    from cirisnode.utils.data_loaders import load_he300_data
-    
-    health_info = {
+    from cirisnode.utils.data_loaders import (
+        HE300DataUnavailable, he300_data_source, load_he300_data,
+    )
+
+    health_info: Dict[str, Any] = {
         "status": "healthy",
         "eee_enabled": settings.EEE_ENABLED,
         "eee_base_url": settings.EEE_BASE_URL if settings.EEE_ENABLED else None,
+        "scenario_source": he300_data_source(),
     }
-    
-    # Check local data
+
+    # Local data: report the full dataset size (the old `limit=10` made a healthy
+    # node and a node with 3 placeholder scenarios look the same, CIRISNode#32).
     try:
-        local_scenarios = load_he300_data(limit=10)
+        local_scenarios = load_he300_data()
         health_info["local_data_available"] = len(local_scenarios) > 0
         health_info["local_scenario_count"] = len(local_scenarios)
+        health_info["local_categories"] = sorted({s["category"] for s in local_scenarios})
+    except HE300DataUnavailable as e:
+        health_info["status"] = "degraded"
+        health_info["local_data_available"] = False
+        health_info["local_scenario_count"] = 0
+        health_info["local_data_error"] = str(e)
     except Exception as e:
+        health_info["status"] = "degraded"
         health_info["local_data_available"] = False
         health_info["local_data_error"] = str(e)
-    
+
     # Check EEE connectivity if enabled
     if settings.EEE_ENABLED:
         try:
@@ -234,7 +267,9 @@ async def he300_health():
         except Exception as e:
             health_info["eee_connected"] = False
             health_info["eee_error"] = str(e)
-    
+
+    if health_info["status"] != "healthy":
+        return JSONResponse(status_code=503, content=health_info)
     return health_info
 
 
