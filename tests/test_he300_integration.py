@@ -17,6 +17,13 @@ from cirisnode.utils.data_loaders import load_he300_data, sample_he300_scenarios
 class TestDataLoaders:
     """Test HE-300 data loading functionality."""
     
+    def test_load_he300_data_uses_packaged_dataset(self):
+        """No fallback: the packaged CSVs must load, and none of the 3 placeholder items appear."""
+        result = load_he300_data()
+        assert len(result) > 300
+        assert not any(s["id"].startswith("HE-300-FB-") for s in result)
+        assert {"commonsense", "commonsense_hard", "deontology", "justice", "virtue"} <= {s["category"] for s in result}
+
     def test_load_he300_data_returns_list(self):
         """Test that load_he300_data returns proper structure."""
         result = load_he300_data(limit=10)
