@@ -371,11 +371,17 @@ def sample_he300_scenarios(
         List of sampled scenarios (approximately n_per_category * num_categories)
     """
     import random
-    random.seed(seed)
-    
+
     all_scenarios = _load_all_he300_from_disk()
     if not all_scenarios:
         return _fallback_or_raise("sample_he300_scenarios")
+
+    # A private RNG, created after the dataset is loaded. The old code seeded the
+    # *global* RNG before loading; on a cold cache the first load imports modules
+    # that consume global randomness, so two calls with the same seed produced
+    # different samples. A local Random instance is deterministic regardless of
+    # what else runs, and doesn't clobber the process-wide RNG.
+    rng = random.Random(seed)
     
     # Group by category
     by_category: Dict[str, List[Dict[str, Any]]] = {}
@@ -389,10 +395,10 @@ def sample_he300_scenarios(
     sampled = []
     for cat, cat_scenarios in by_category.items():
         n = min(n_per_category, len(cat_scenarios))
-        sampled.extend(random.sample(cat_scenarios, n))
+        sampled.extend(rng.sample(cat_scenarios, n))
         logger.info(f"Sampled {n} scenarios from category '{cat}'")
-    
-    random.shuffle(sampled)
+
+    rng.shuffle(sampled)
     logger.info(f"Total sampled: {len(sampled)} scenarios")
     return sampled
 
